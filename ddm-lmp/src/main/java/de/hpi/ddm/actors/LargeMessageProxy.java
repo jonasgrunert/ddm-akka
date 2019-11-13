@@ -1,19 +1,15 @@
 package de.hpi.ddm.actors;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.concurrent.CompletionStage;
-
-import akka.Done;
-import akka.NotUsed;
+import java.util.List;
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.ActorSelection;
 import akka.actor.Props;
 import akka.japi.function.Creator;
 import akka.stream.ActorMaterializer;
-import akka.stream.Materializer;
-import akka.stream.OverflowStrategy;
 import akka.stream.javadsl.Sink;
 import akka.stream.javadsl.Source;
 import de.hpi.ddm.structures.KryoPoolSingleton;
@@ -78,7 +74,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	// Actor State //
 	/////////////////
 
-	private byte[] incomingRequest = new byte[0];
+	private List<Byte> incomingRequest = new ArrayList<Byte>();
 	private byte[] outgoingRequest = new byte[0];
 	private ActorRef receiver;
 
@@ -99,6 +95,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 				.match(ConfigurationMessage.class, this::handle)
 				.match(RequestMessage.class, this::handle)
 				.match(Byte.class, this::handle)
+				.match(StreamCompletedMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -149,10 +146,9 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		};
 		Source
 				.fromIterator(creator)
-				//.actorRef(16, OverflowStrategy.fail())
 				.to(Sink.actorRef(message.getSender(), new StreamCompletedMessage()))
 				.run(ActorMaterializer.create(this.context()));
-				//.tell(new BytesMessage<>(this.outgoingRequest, this.self(), this.receiver), this.self());
+		message.getSender().tell(new StreamCompletedMessage(), this.self());
 	}
 
 	private void handle(RequestMessage message) {
@@ -162,7 +158,19 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 
 	private void handle(Byte message) {
 		// Assemble the bytes again
-		this.log().info("Got data");
-		this.receiver.tell(KryoPoolSingleton.get().fromBytes(this.incomingRequest), this.self());
+		// for the sake of speed you should not this:  this.log().info("Byte arrived");
+		this.incomingRequest.add(message);
 	}
+	private void handle(StreamCompletedMessage message){
+		this.log().info("Request ended");
+		byte[] bytes = new byte[this.incomingRequest.size()];
+		int i = 0;
+		while (i < this.incomingRequest.size()) {
+			bytes[i] = this.incomingRequest.get(i);
+			i++;
+		}
+		t
+		this.receiver.tell(KryoPoolSingleton.get().fromBytes(bytes), this.self());
+	}
+
 }
