@@ -162,14 +162,13 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		this.incomingRequest.add(message);
 	}
 	private void handle(StreamCompletedMessage message){
-		this.log().info("Request ended");
+		// Apparently it assemble back to fast and size length is 0 then
 		byte[] bytes = new byte[this.incomingRequest.size()];
 		int i = 0;
 		while (i < this.incomingRequest.size()) {
 			bytes[i] = this.incomingRequest.get(i);
 			i++;
 		}
-		t
 		this.receiver.tell(KryoPoolSingleton.get().fromBytes(bytes), this.self());
 	}
 
