@@ -4,6 +4,7 @@ import java.io.Serializable;
 import java.util.Iterator;
 import java.util.concurrent.CompletionStage;
 
+import akka.Done;
 import akka.NotUsed;
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
@@ -11,10 +12,10 @@ import akka.actor.ActorSelection;
 import akka.actor.Props;
 import akka.japi.function.Creator;
 import akka.stream.ActorMaterializer;
+import akka.stream.Materializer;
 import akka.stream.OverflowStrategy;
 import akka.stream.javadsl.Sink;
 import akka.stream.javadsl.Source;
-import com.twitter.chill.KryoPool;
 import de.hpi.ddm.structures.KryoPoolSingleton;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -35,6 +36,23 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	////////////////////
 	// Actor Messages //
 	////////////////////
+
+	@Data
+	private static class StreamCompletedMessage {}
+
+	@Data
+	@NoArgsConstructor
+	@AllArgsConstructor
+	private static class RequestMessage implements Serializable {
+		private ActorRef sender;
+	}
+
+	@Data
+	@NoArgsConstructor
+	@AllArgsConstructor
+	private  static class ConfigurationMessage implements Serializable {
+		private ActorRef sender;
+	}
 
 	@Data
 	@NoArgsConstructor
@@ -59,6 +77,10 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	// Actor State //
 	/////////////////
 
+	private byte[] incomingRequest = new byte[0];
+	private byte[] outgoingRequest = new byte[0];
+	private ActorRef receiver;
+
 	/////////////////////
 	// Actor Lifecycle //
 	/////////////////////
@@ -73,26 +95,64 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		return receiveBuilder()
 				.match(LargeMessage.class, this::handle)
 				.match(BytesMessage.class, this::handle)
+				.match(ConfigurationMessage.class, this::handle)
+				.match(RequestMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
 
 	private void handle(LargeMessage<?> message) {
-		ActorRef receiver = message.getReceiver();
+		this.receiver = message.getReceiver();
 		ActorSelection receiverProxy = this.context().actorSelection(receiver.path().child(DEFAULT_NAME));
 
 		// serializing with kryo and the architecture given
-		byte[] seq = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
+		this.outgoingRequest = KryoPoolSingleton.get().toBytesWithClass(message.getMessage());
 		/* building an akka stream
 		 * 1. create Source
 		 * 2. create sink
 		 * 3. materialize
 		 */
-		receiverProxy.tell(new BytesMessage<>(seq, this.sender(), message.getReceiver()), this.self());
+		/* Additional work
+		 * 1. create a remote sink
+		 * 2. connect to it
+		 * 3. wrap up the stream and give it out
+		 */
+		receiverProxy.tell(new ConfigurationMessage(this.self()), this.self());
 	}
 
-	private void handle(BytesMessage<?> message) {
+	private void handle(BytesMessage<byte[]> message) {
 		// Reassemble the message content, deserialize it and/or load the content from some local location before forwarding its content.
+		this.log().info("Got data");
 		message.getReceiver().tell(message.getBytes(), message.getSender());
+	}
+
+	private void handle(ConfigurationMessage message) {
+		Creator creator = new Creator() {
+			@Override
+			public Object create() throws Exception, Exception {
+				return new Iterator<Byte>() {
+					private int i = 0;
+
+					@Override
+					public boolean hasNext() {
+						return outgoingRequest.length > i;
+					}
+
+					@Override
+					public Byte next() {
+						return Byte.valueOf(outgoingRequest[i++]);
+					}
+				};
+			}
+		};
+		Source
+				.actorRef(16, OverflowStrategy.fail())
+				.to(Sink.actorRef(message.getSender(), new StreamCompletedMessage()))
+				.run(ActorMaterializer.create(this.context()))
+				.tell(new BytesMessage<>(this.outgoingRequest, this.self(), this.receiver), this.self());
+	}
+
+	private void handle(RequestMessage message) {
+		message.getSender().tell(new ConfigurationMessage(this.self()), this.self());
 	}
 }
