@@ -45,6 +45,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	@AllArgsConstructor
 	private static class RequestMessage implements Serializable {
 		private ActorRef sender;
+		private ActorRef receiver;
 	}
 
 	@Data
@@ -97,6 +98,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 				.match(BytesMessage.class, this::handle)
 				.match(ConfigurationMessage.class, this::handle)
 				.match(RequestMessage.class, this::handle)
+				.match(Byte.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -117,7 +119,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		 * 2. connect to it
 		 * 3. wrap up the stream and give it out
 		 */
-		receiverProxy.tell(new RequestMessage(this.self()), this.self());
+		receiverProxy.tell(new RequestMessage(this.self(), this.receiver), this.self());
 	}
 
 	private void handle(BytesMessage<byte[]> message) {
@@ -146,13 +148,21 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			}
 		};
 		Source
-				.actorRef(16, OverflowStrategy.fail())
+				.fromIterator(creator)
+				//.actorRef(16, OverflowStrategy.fail())
 				.to(Sink.actorRef(message.getSender(), new StreamCompletedMessage()))
-				.run(ActorMaterializer.create(this.context()))
-				.tell(new BytesMessage<>(this.outgoingRequest, this.self(), this.receiver), this.self());
+				.run(ActorMaterializer.create(this.context()));
+				//.tell(new BytesMessage<>(this.outgoingRequest, this.self(), this.receiver), this.self());
 	}
 
 	private void handle(RequestMessage message) {
+		this.receiver = message.getReceiver();
 		message.getSender().tell(new ConfigurationMessage(this.self()), this.self());
+	}
+
+	private void handle(Byte message) {
+		// Assemble the bytes again
+		this.log().info("Got data");
+		this.receiver.tell(KryoPoolSingleton.get().fromBytes(this.incomingRequest), this.self());
 	}
 }
