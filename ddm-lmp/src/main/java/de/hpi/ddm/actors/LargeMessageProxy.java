@@ -117,13 +117,13 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		 * 2. connect to it
 		 * 3. wrap up the stream and give it out
 		 */
-		receiverProxy.tell(new ConfigurationMessage(this.self()), this.self());
+		receiverProxy.tell(new RequestMessage(this.self()), this.self());
 	}
 
 	private void handle(BytesMessage<byte[]> message) {
 		// Reassemble the message content, deserialize it and/or load the content from some local location before forwarding its content.
 		this.log().info("Got data");
-		message.getReceiver().tell(message.getBytes(), message.getSender());
+		message.getReceiver().tell(KryoPoolSingleton.get().fromBytes(message.getBytes()), message.getSender());
 	}
 
 	private void handle(ConfigurationMessage message) {
