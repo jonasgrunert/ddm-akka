@@ -153,7 +153,8 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			public Object create() throws Exception, Exception {
 				return new Iterator<Byte[]>() {
 					private int i = 0;
-					private int size = 260000;
+					//this is more or less arbitrary, but gives good results
+					private int size = 200000;
 					@Override
 					public boolean hasNext() {
 						return outgoingRequest.length > i*size;
