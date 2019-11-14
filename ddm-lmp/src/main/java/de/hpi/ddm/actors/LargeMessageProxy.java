@@ -35,14 +35,18 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	// Actor Messages //
 	////////////////////
 
-	private static class StreamCompletedMessage {}
+	@Data
+	@NoArgsConstructor
+	private static class StreamCompletedMessage implements Serializable{}
 
-	private static class StreamInitializedMessage {}
+	@Data
+	@NoArgsConstructor
+	private static class StreamInitializedMessage implements Serializable {}
 
 	@Data
 	@NoArgsConstructor
 	@AllArgsConstructor
-	private static class StreamFailureMessage {
+	private static class StreamFailureMessage implements Serializable {
 		private Throwable cause;
 	}
 
@@ -132,7 +136,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		 * 2. connect to it
 		 * 3. wrap up the stream and give it out
 		 */
-		this.log().info("Serialized into array of length {}", this.outgoingRequest.length);
+		// this.log().info("Serialized into array of length {}", this.outgoingRequest.length);
 		receiverProxy.tell(new RequestMessage(this.self(), this.receiver), this.self());
 	}
 
@@ -157,10 +161,14 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 
 					@Override
 					public Byte[] next() {
-						int o = i;
-						i+=size;
+						int a = i*size;
+						int o = a+size;
+						if(o > outgoingRequest.length){
+							o = outgoingRequest.length;
+						}
+						i++;
 						return IntStream
-								.range(o, o+size)
+								.range(a, o)
 								.mapToObj(k ->Byte.valueOf(outgoingRequest[k]))
 								.toArray(Byte[]::new);
 					}
@@ -201,7 +209,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			bytes[i] = this.incomingRequest.get(i);
 			i++;
 		}
-		this.log().info("Serialized into array of length {}", bytes.length);
+		// this.log().info("Serialized into array of length {}", bytes.length);
 		this.receiver.tell(KryoPoolSingleton.get().fromBytes(bytes), this.self());
 	}
 	private void handle(StreamInitializedMessage message){
@@ -210,7 +218,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	}
 	private void handle(StreamFailureMessage message){
 		// Apparently it assemble back to fast and size length is 0 then
-		this.log().error(message.getCause().getMessage());
+		this.log().error(message.getCause().toString());
 	}
 
 }
