@@ -211,7 +211,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			i++;
 		}
 		// this.log().info("Serialized into array of length {}", bytes.length);
-		this.receiver.tell(KryoPoolSingleton.get().fromBytes(bytes), this.self());
+		this.receiver.tell(new BytesMessage<>(KryoPoolSingleton.get().fromBytes(bytes), this.sender(), this.receiver), this.sender());
 	}
 	private void handle(StreamInitializedMessage message){
 		this.log().info("Started Streaming");
@@ -221,5 +221,4 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		// Apparently it assemble back to fast and size length is 0 then
 		this.log().error(message.getCause().toString());
 	}
-
 }
