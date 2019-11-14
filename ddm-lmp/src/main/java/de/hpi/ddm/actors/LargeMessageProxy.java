@@ -4,6 +4,8 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.stream.IntStream;
+
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
 import akka.actor.ActorSelection;
@@ -33,8 +35,17 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	// Actor Messages //
 	////////////////////
 
-	@Data
 	private static class StreamCompletedMessage {}
+
+	private static class StreamInitializedMessage {}
+
+	@Data
+	@NoArgsConstructor
+	@AllArgsConstructor
+	private static class StreamFailureMessage {
+		private Throwable cause;
+	}
+
 
 	@Data
 	@NoArgsConstructor
@@ -74,6 +85,9 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	// Actor State //
 	/////////////////
 
+	enum Ack {
+		INSTANCE
+	}
 	private List<Byte> incomingRequest = new ArrayList<Byte>();
 	private byte[] outgoingRequest = new byte[0];
 	private ActorRef receiver;
@@ -94,8 +108,10 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 				.match(BytesMessage.class, this::handle)
 				.match(ConfigurationMessage.class, this::handle)
 				.match(RequestMessage.class, this::handle)
-				.match(Byte.class, this::handle)
+				.match(Byte[].class, this::handle)
 				.match(StreamCompletedMessage.class, this::handle)
+				.match(StreamInitializedMessage.class, this::handle)
+				.match(StreamFailureMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -116,6 +132,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		 * 2. connect to it
 		 * 3. wrap up the stream and give it out
 		 */
+		this.log().info("Serialized into array of length {}", this.outgoingRequest.length);
 		receiverProxy.tell(new RequestMessage(this.self(), this.receiver), this.self());
 	}
 
@@ -125,30 +142,41 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		message.getReceiver().tell(KryoPoolSingleton.get().fromBytes(message.getBytes()), message.getSender());
 	}
 
+
 	private void handle(ConfigurationMessage message) {
 		Creator creator = new Creator() {
 			@Override
 			public Object create() throws Exception, Exception {
-				return new Iterator<Byte>() {
+				return new Iterator<Byte[]>() {
 					private int i = 0;
-
+					private int size = 260000;
 					@Override
 					public boolean hasNext() {
-						return outgoingRequest.length > i;
+						return outgoingRequest.length > i*size;
 					}
 
 					@Override
-					public Byte next() {
-						return Byte.valueOf(outgoingRequest[i++]);
+					public Byte[] next() {
+						int o = i;
+						i+=size;
+						return IntStream
+								.range(o, o+size)
+								.mapToObj(k ->Byte.valueOf(outgoingRequest[k]))
+								.toArray(Byte[]::new);
 					}
 				};
 			}
 		};
+		Sink sink = Sink.actorRefWithAck(
+				message.getSender(),
+				new StreamInitializedMessage(),
+				Ack.INSTANCE,
+				new StreamCompletedMessage(),
+				err -> new StreamFailureMessage(err)
+		);
 		Source
 				.fromIterator(creator)
-				.to(Sink.actorRef(message.getSender(), new StreamCompletedMessage()))
-				.run(ActorMaterializer.create(this.context()));
-		message.getSender().tell(new StreamCompletedMessage(), this.self());
+				.runWith(sink, ActorMaterializer.create(this.context()));
 	}
 
 	private void handle(RequestMessage message) {
@@ -156,20 +184,33 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		message.getSender().tell(new ConfigurationMessage(this.self()), this.self());
 	}
 
-	private void handle(Byte message) {
+	private void handle(Byte[] message) {
 		// Assemble the bytes again
 		// for the sake of speed you should not this:  this.log().info("Byte arrived");
-		this.incomingRequest.add(message);
+		for(Byte temp : message){
+			this.incomingRequest.add(temp);
+		}
+		sender().tell(Ack.INSTANCE, self());
 	}
 	private void handle(StreamCompletedMessage message){
 		// Apparently it assemble back to fast and size length is 0 then
+		this.log().info("Finished streaming");
 		byte[] bytes = new byte[this.incomingRequest.size()];
 		int i = 0;
 		while (i < this.incomingRequest.size()) {
 			bytes[i] = this.incomingRequest.get(i);
 			i++;
 		}
+		this.log().info("Serialized into array of length {}", bytes.length);
 		this.receiver.tell(KryoPoolSingleton.get().fromBytes(bytes), this.self());
+	}
+	private void handle(StreamInitializedMessage message){
+		this.log().info("Started Streaming");
+		sender().tell(Ack.INSTANCE, self());
+	}
+	private void handle(StreamFailureMessage message){
+		// Apparently it assemble back to fast and size length is 0 then
+		this.log().error(message.getCause().getMessage());
 	}
 
 }
