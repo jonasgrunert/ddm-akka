@@ -55,6 +55,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	@NoArgsConstructor
 	@AllArgsConstructor
 	private static class RequestMessage implements Serializable {
+		private ActorRef master;
 		private ActorRef sender;
 		private ActorRef receiver;
 	}
@@ -92,6 +93,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 	enum Ack {
 		INSTANCE
 	}
+	private ActorRef sender;
 	private List<Byte> incomingRequest = new ArrayList<Byte>();
 	private byte[] outgoingRequest = new byte[0];
 	private ActorRef receiver;
@@ -137,7 +139,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 		 * 3. wrap up the stream and give it out
 		 */
 		// this.log().info("Serialized into array of length {}", this.outgoingRequest.length);
-		receiverProxy.tell(new RequestMessage(this.self(), this.receiver), this.self());
+		receiverProxy.tell(new RequestMessage(this.sender(), this.self(), this.receiver), this.self());
 	}
 
 	private void handle(BytesMessage<byte[]> message) {
@@ -190,6 +192,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 
 	private void handle(RequestMessage message) {
 		this.receiver = message.getReceiver();
+		this.sender = message.getMaster();
 		message.getSender().tell(new ConfigurationMessage(this.self()), this.self());
 	}
 
@@ -211,7 +214,7 @@ public class LargeMessageProxy extends AbstractLoggingActor {
 			i++;
 		}
 		// this.log().info("Serialized into array of length {}", bytes.length);
-		this.receiver.tell(new BytesMessage<>(KryoPoolSingleton.get().fromBytes(bytes), this.sender(), this.receiver), this.sender());
+		this.receiver.tell(KryoPoolSingleton.get().fromBytes(bytes), this.sender);
 	}
 	private void handle(StreamInitializedMessage message){
 		this.log().info("Started Streaming");
