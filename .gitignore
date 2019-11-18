@@ -4,3 +4,6 @@
 ddm-lmp/target/*
 ddm-lmp/.idea/*
 *.iml
+ddm-pc/target/*
+ddm-pc/.idea/*
+*.~lock*
