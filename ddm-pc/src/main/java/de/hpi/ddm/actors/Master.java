@@ -65,10 +65,21 @@ public class Master extends AbstractLoggingActor {
 	/////////////////
 
 	@Data
-	@AllArgsConstructor
 	private class Password {
 		private int ID;
 		private String name;
+		private String[] encodedHints;
+		private String[] decodedHints;
+		private String encodedPassword;
+		private String decodedPassword;
+
+
+        public Password(int Id, String name, String password, String[] hints){
+		    this.ID = Id;
+		    this.name = name;
+		    this.encodedPassword = password;
+		    this.encodedHints = hints;
+        }
 	}
 
 	private final ActorRef reader;
@@ -80,8 +91,9 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
-	private HashMap<String, String> hintMap = new HashMap<String, String>();
-	private HashMap<String, Password> passwordMap = new HashMap<String, Password>();
+	private  HashMap<String, String> hashMap = new HashMap<String, String>();
+	private HashMap<String, Integer> hintMap = new HashMap<String, Integer>();
+	private HashMap<Integer, Password> passwordMap = new HashMap<Integer, Password>();
 
 	private List<char[]> mutations = new ArrayList<char[]>();
 
@@ -105,6 +117,7 @@ public class Master extends AbstractLoggingActor {
 				.match(BatchMessage.class, this::handle)
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
+                .match(Worker.HashCalculatedMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -156,9 +169,15 @@ public class Master extends AbstractLoggingActor {
 
 		for (String[] line : message.getLines()) {
 			// We also want to start creating this wonderful hashmap where we store the hash as key with the corresponding string it generates
-			this.passwordMap.put(line[4], new Password(Integer.parseInt(line[0]), line[1]));
-			for(String hash : IntStream.range(5, line.length).mapToObj(i -> line[i]).toArray(String[]::new)){
-				this.hintMap.put(hash, "");
+			int Id = Integer.parseInt(line[0]);
+			String name = line[1];
+			String password = line[4];
+			String[] hints = IntStream.range(5, line.length).mapToObj(i -> line[i]).toArray(String[]::new);
+            this.passwordMap.put(Id, new Password(Id, name, password, hints));
+			this.hashMap.put(password, "");
+            for(String hint : hints){
+				this.hintMap.put(hint, Id);
+				this.hashMap.put(hint, "");
 			}
 			System.out.println(Arrays.toString(line));
 		}
@@ -193,4 +212,17 @@ public class Master extends AbstractLoggingActor {
 		this.workers.remove(message.getActor());
 //		this.log().info("Unregistered {}", message.getActor());
 	}
+
+	protected  void handle(Worker.HashCalculatedMessage message){
+	    this.hashMap.put(message.getEncoded(), message.getDecoded());
+	    int idx = this.hintMap.getOrDefault(message.getEncoded(), -1);
+	    if(idx != -1){
+	        Password pw = this.passwordMap.get(idx);
+	        for(int i= 0; i< pw.encodedHints.length; i++){
+	            if(pw.encodedHints[i] == message.getEncoded()){
+	                pw.decodedHints[i] = message.getDecoded();
+                }
+            }
+        }
+    }
 }

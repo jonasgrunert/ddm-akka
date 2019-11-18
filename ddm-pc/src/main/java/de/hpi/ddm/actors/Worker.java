@@ -16,6 +16,9 @@ import akka.cluster.ClusterEvent.MemberUp;
 import akka.cluster.Member;
 import akka.cluster.MemberStatus;
 import de.hpi.ddm.MasterSystem;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 public class Worker extends AbstractLoggingActor {
 
@@ -36,6 +39,12 @@ public class Worker extends AbstractLoggingActor {
 	////////////////////
 	// Actor Messages //
 	////////////////////
+
+	@Data @AllArgsConstructor @NoArgsConstructor
+	public static class HashCalculatedMessage {
+		private String encoded;
+		private String decoded;
+	}
 
 	/////////////////
 	// Actor State //
