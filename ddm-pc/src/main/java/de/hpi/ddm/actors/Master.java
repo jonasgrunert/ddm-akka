@@ -79,6 +79,7 @@ public class Master extends AbstractLoggingActor {
 		    this.name = name;
 		    this.encodedPassword = password;
 		    this.encodedHints = hints;
+		    this.decodedHints = new String[hints.length];
         }
 	}
 
@@ -91,8 +92,11 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
-	private  HashMap<String, String> hashMap = new HashMap<String, String>();
+	// hash to letter combination
+	private HashMap<String, String> hashMap = new HashMap<String, String>();
+	// hint hash to an int (id)
 	private HashMap<String, Integer> hintMap = new HashMap<String, Integer>();
+	// id to the password class
 	private HashMap<Integer, Password> passwordMap = new HashMap<Integer, Password>();
 
 	private List<char[]> mutations = new ArrayList<char[]>();
@@ -156,12 +160,14 @@ public class Master extends AbstractLoggingActor {
 					sub[k++] = this.pChars[j];
 				}
 			}
+			System.out.println(sub);
 			this.mutations.add(sub);
 		}
 
 		// As soon as we know this we want to start calculating and shooting messages to every available worker
 		// We want to cleverly chunk the options here...
 		// Maybe we should delegate this even further from the worker
+        // TODO Implement this part on the worker class
 		for(ActorRef worker: this.workers){
 			worker.tell(new CalculateHashMessage(mutations.get(mutations.size()-1)), this.self());
 			mutations.remove(mutations.size()-1);
@@ -213,11 +219,16 @@ public class Master extends AbstractLoggingActor {
 //		this.log().info("Unregistered {}", message.getActor());
 	}
 
-	protected  void handle(Worker.HashCalculatedMessage message){
+	protected void handle(Worker.HashCalculatedMessage message){
+		// put it in the hashmap for later use
 	    this.hashMap.put(message.getEncoded(), message.getDecoded());
+	    // retrieve the password id or a default
 	    int idx = this.hintMap.getOrDefault(message.getEncoded(), -1);
+	    // is there an encoded hint
 	    if(idx != -1){
+	    	// we get the password class from the passwordmap
 	        Password pw = this.passwordMap.get(idx);
+	        // adding decoded Hint to array;
 	        for(int i= 0; i< pw.encodedHints.length; i++){
 	            if(pw.encodedHints[i] == message.getEncoded()){
 	                pw.decodedHints[i] = message.getDecoded();
