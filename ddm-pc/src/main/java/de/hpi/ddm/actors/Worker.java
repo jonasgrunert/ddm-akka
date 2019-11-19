@@ -3,6 +3,7 @@ package de.hpi.ddm.actors;
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.List;
 
 import akka.actor.AbstractLoggingActor;
@@ -46,6 +47,16 @@ public class Worker extends AbstractLoggingActor {
 		private String decoded;
 	}
 
+	@Data @NoArgsConstructor @AllArgsConstructor
+	public static class HeapCalculatedMessage {
+		private String[] heaps;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	public static class RegisterToWorkloadMessage {
+		private String identifier;
+	}
+
 	/////////////////
 	// Actor State //
 	/////////////////
@@ -79,7 +90,8 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
-				.match(Master.CalculateHashMessage.class, this::handle) //1
+				.match(Master.CalculateHashMessage.class, this::handle)
+				.match(Master.CalculateHeapMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -110,10 +122,15 @@ public class Worker extends AbstractLoggingActor {
 			this.self().tell(PoisonPill.getInstance(), ActorRef.noSender());
 	}
 
+	private void handle(Master.CalculateHeapMessage message){
+		this.sender().tell(new RegisterToWorkloadMessage(message.getIdentifier()), this.self());
+		List<String> heaps = new ArrayList<String>();
+		heapPermutation(message.getHeap(), message.getLength(), heaps);
+		this.sender().tell(new HeapCalculatedMessage(heaps.toArray(new String[heaps.size()])), this.self());
+	}
+
 	private void handle(Master.CalculateHashMessage message){
-		//TODO: add work to the worker
-		//TODO: send message to master!!
-		getContext().getSender().tell(new Master.RegisterToWorkload(message.getIndex()), this.self()); //FUNCIONA>???????
+		this.sender().tell(new RegisterToWorkloadMessage(message.getIdentifier()), this.self());
 	}
 	
 	private String hash(String line) {
@@ -135,13 +152,13 @@ public class Worker extends AbstractLoggingActor {
 	// Generating all permutations of an array using Heap's Algorithm
 	// https://en.wikipedia.org/wiki/Heap's_algorithm
 	// https://www.geeksforgeeks.org/heaps-algorithm-for-generating-permutations/
-	private void heapPermutation(char[] a, int size, int n, List<String> l) {
+	private void heapPermutation(char[] a, int size, List<String> l) {
 		// If size is 1, store the obtained permutation
 		if (size == 1)
 			l.add(new String(a));
 
 		for (int i = 0; i < size; i++) {
-			heapPermutation(a, size - 1, n, l);
+			heapPermutation(a, size - 1, l);
 
 			// If size is odd, swap first and last element
 			if (size % 2 == 1) {
