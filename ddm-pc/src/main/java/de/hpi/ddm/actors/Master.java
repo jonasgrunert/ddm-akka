@@ -170,6 +170,11 @@ public class Master extends AbstractLoggingActor {
         // TODO Implement this part on the worker class
 		for(ActorRef worker: this.workers){
 			worker.tell(new CalculateHashMessage(mutations.get(mutations.size()-1)), this.self());
+			//@Jonas**First need to confirm if worker got the task before removing from mutations list??
+			//TODO: First send message to worker with task. Then worker responds with task initialized
+			//TODO: Then master registers worker in parallel list.
+			//TODO: if task is already registered to a worker, send worker another task
+			//TODO: if all tasks are full, give worker no task
 			mutations.remove(mutations.size()-1);
 		}
 
