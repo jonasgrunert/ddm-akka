@@ -79,7 +79,7 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
-				.match(Master.CalculateHashMessage.class, this::handle)
+				.match(Master.CalculateHashMessage.class, this::handle) //1
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -111,7 +111,9 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(Master.CalculateHashMessage message){
-		//handle workload sent from master
+		//TODO: add work to the worker
+		//TODO: send message to master!!
+		getContext().getSender().tell(new Master.RegisterToWorkload(message.getIndex()), this.self()); //FUNCIONA>???????
 	}
 	
 	private String hash(String line) {

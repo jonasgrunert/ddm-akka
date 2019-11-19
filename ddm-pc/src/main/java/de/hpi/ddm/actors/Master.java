@@ -58,6 +58,13 @@ public class Master extends AbstractLoggingActor {
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class CalculateHashMessage {
 		private char[] chars;
+		private int index;
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	public static class RegisterToWorkload {
+		private int index; //index of workload that worker received from master
+		//worker will send ref as well (inside tell())
 	}
 	
 	/////////////////
@@ -100,6 +107,9 @@ public class Master extends AbstractLoggingActor {
 	private HashMap<Integer, Password> passwordMap = new HashMap<Integer, Password>();
 
 	private List<char[]> mutations = new ArrayList<char[]>();
+	//Array of mutation work assigned to a particular worker (parallel array with mutations)
+	int batchSize = 100;//TODO: IMPORTANT: initialCapacity=batch size
+	private String mutationsWithWorkers[] = new String [batchSize];
 
 	/////////////////////
 	// Actor Lifecycle //
@@ -118,10 +128,12 @@ public class Master extends AbstractLoggingActor {
 	public Receive createReceive() {
 		return receiveBuilder()
 				.match(StartMessage.class, this::handle)
-				.match(BatchMessage.class, this::handle)
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
-                .match(Worker.HashCalculatedMessage.class, this::handle)
+				.match(BatchMessage.class, this::handle) //1
+				.match(RegisterToWorkload.class, this::handle)//2 TODO: Add message reception of worker acknowledgment and task reception
+				// 3 TODO: Add handler for worker assignment on parallel list
+                .match(Worker.HashCalculatedMessage.class, this::handle) //When worker sends work calculated
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -168,16 +180,19 @@ public class Master extends AbstractLoggingActor {
 		// We want to cleverly chunk the options here...
 		// Maybe we should delegate this even further from the worker
         // TODO Implement this part on the worker class
+		int indx = 0;
 		for(ActorRef worker: this.workers){
-			worker.tell(new CalculateHashMessage(mutations.get(mutations.size()-1)), this.self());
-			//@Jonas**First need to confirm if worker got the task before removing from mutations list??
+			//worker.tell(new CalculateHashMessage(mutations.get(mutations.size()-1)), this.self());
+			worker.tell(new CalculateHashMessage(mutations.get(indx), indx), this.self());
 			//TODO: First send message to worker with task. Then worker responds with task initialized
 			//TODO: Then master registers worker in parallel list.
 			//TODO: if task is already registered to a worker, send worker another task
 			//TODO: if all tasks are full, give worker no task
-			mutations.remove(mutations.size()-1);
+			//mutations.remove(mutations.size()-1); //tal vez no usar? no usar!
+			indx++;
 		}
 
+		//TODO: Move this into another response (when master is sure that workers got the work load)
 		for (String[] line : message.getLines()) {
 			// We also want to start creating this wonderful hashmap where we store the hash as key with the corresponding string it generates
 			int Id = Integer.parseInt(line[0]);
@@ -195,6 +210,13 @@ public class Master extends AbstractLoggingActor {
 
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
 		this.reader.tell(new Reader.ReadMessage(), this.self());
+	}
+
+	private void handle(RegisterToWorkload message) {
+		System.out.println("[Test Message] Master got index " + message.getIndex() + " from worker " + getContext().getSender());
+		//add worker reference to the workload array
+		mutationsWithWorkers[message.getIndex()] = getContext().getSender().toString();
+		for (String x:mutationsWithWorkers){System.out.print(" " + x);}
 	}
 	
 	protected void terminate() {
