@@ -30,10 +30,9 @@ public class Master extends AbstractLoggingActor {
 	public Master(final ActorRef reader, final ActorRef collector) {
 		this.reader = reader;
 		this.collector = collector;
-		this.hintMap = new HashMap<String, List<Integer>>();
+		this.hintMap = new HashMap<String, String>();
 		this.passwordMap = new HashMap<Integer, Password>();
 		this.workerInUseMap = new HashMap<ActorRef, Boolean>();
-		this.hashMap = new HashMap<String, String>();
 		this.mutations = new ArrayList<char[]>();
 		this.tasksPipe = new ArrayList<WorkloadMessage>();
 	}
@@ -63,25 +62,21 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class CalculateHashesMessage implements WorkloadMessage {
-		private String[] hash;
-		public String getIdentifier(){ return "CalculateHashes: ".concat(this.hash[0]); };
-	}
-
-
-	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class CalculateHeapMessage implements WorkloadMessage {
-		private char[] heap;
-		private int length;
-		public String getIdentifier(){ return "CalculateHeap: ".concat(new String(this.heap)); }
+	public static class CrackHintMessage implements WorkloadMessage {
+		private int Id;
+		private String hash;
+		private char[] universe;
+		public String getIdentifier() { return "CrackHint: ".concat(hash); }
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class CrackPasswordMessage implements WorkloadMessage {
-		private Password entity;
-		private int length;
+		private Password pw;
 		private char[] universe;
-		public String getIdentifier() { return "CrackPassword: ".concat(String.valueOf(this.entity.getId())); }
+		private int length;
+
+		@Override
+		public String getIdentifier() { return "CrackPassword: ".concat(pw.getName()); }
 	}
 
 	/////////////////
@@ -122,9 +117,7 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
-	private HashMap<String, String> hashMap;
-	// hint hash to an int (id)
-	private HashMap<String, List<Integer>> hintMap;
+	private HashMap<String, String> hintMap;
 	// id to the password class
 	private HashMap<Integer, Password> passwordMap;
 	// way to identify if worker is in use or not boolean value inUse = true; notinUse = false
@@ -152,27 +145,29 @@ public class Master extends AbstractLoggingActor {
 				.match(StartMessage.class, this::handle)
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
-				.match(BatchMessage.class, this::handle) //1
-				.match(Worker.HeapCalculatedMessage.class, this::handle) // calculated a heap
-                .match(Worker.HashCalculatedMessage.class, this::handle) // When worker sends work calculated
-				.match(Worker.PasswordCrackedMessage.class, this::handle) // Password got cracked
-				.match(Worker.WorkerFreeMessage.class, this::handle) // When worker is free again
+				.match(BatchMessage.class, this::handle)
+				.match(Worker.CrackedHintMessage.class, this::handle)
+				.match(Worker.WorkerFreeMessage.class, this::handle)
+				.match(Worker.CrackedPasswordMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
 
-	private void getMutations(char[] data, int dlength, int length, char[] imt, int idx, int i, List<char[]> list){
-		if(idx == length){
-			list.add(imt);
-			return;
+	private void getMutations(char[] data, int length, List<char[]> list){
+		char[] imt = new char[data.length-1];
+		for(int x = 0; x < data.length; x++){
+			int i = 0;
+			for(int j = 0; j < data.length; j++){
+				if(j!=x){
+					imt[i++] = data[j];
+				}
+			}
+			if(imt.length == length){
+				list.add(imt.clone());
+			} else {
+				getMutations(imt, length, list);
+			}
 		}
-		if(i >= dlength) {
-			return;
-		}
-		imt[idx] = data[i];
-		System.out.println(imt);
-		getMutations(data, dlength, length, imt, idx+1, i+1, list);
-		getMutations(data, dlength, length, imt, idx, i+1, list);
 	}
 
 	private void addTask(WorkloadMessage m){
@@ -185,20 +180,18 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	private boolean assignTask(){
-		int freeWorkers = 0;
-		for(boolean occupied: workerInUseMap.values()){
-			if(!occupied){
-				freeWorkers++;
-			}
-		}
-		this.log().info("Having {} open tasks for {} workers", this.tasksPipe.size(), freeWorkers);
 		while(this.tasksPipe.size() != 0 && this.workerInUseMap.values().contains(false)){
 			for (Map.Entry<ActorRef, Boolean> worker: this.workerInUseMap.entrySet()){
 				if(!worker.getValue()){
-					WorkloadMessage task =this.tasksPipe.remove(0);
+					WorkloadMessage task = this.tasksPipe.remove(0);
+					if(Objects.equals(task.getClass(), CrackHintMessage.class)){
+						CrackHintMessage t = (CrackHintMessage)	task;
+						if(this.hintMap.containsKey(t.getHash())) {
+							break;
+						}
+					}
 					worker.getKey().tell(task, this.self());
 					occupyWorker(worker.getKey());
-					this.log().info("Now assigning task {}", task.getIdentifier());
 					break;
 				}
 			}
@@ -235,12 +228,6 @@ public class Master extends AbstractLoggingActor {
 				this.self());
 	}
 
-	private void crackPassword(Password pw, String encoded, String decoded){
-		if(pw.addDecodedHint(encoded, decoded)){
-			addTask(new CrackPasswordMessage(pw, this.pLength, this.pChars));
-		}
-	}
-
 	protected void handle(StartMessage message) {
 		this.startTime = System.currentTimeMillis();
 		
@@ -263,12 +250,7 @@ public class Master extends AbstractLoggingActor {
 		if(this.pLength != Integer.parseInt(message.getLines().get(0)[3])) {
 			this.pLength = Integer.parseInt(message.getLines().get(0)[3]);
 			this.pChars = message.getLines().get(0)[2].toCharArray();
-			List<char[]> mutations = new ArrayList<>();
-			getMutations(this.pChars, this.pChars.length, this.pLength, new char[this.pLength], 0, 0, mutations);
-			for(char[] mutation: mutations){
-				this.log().info(new String(mutation));
-				addTask(new CalculateHeapMessage(mutation, this.pLength));
-			}
+			getMutations(this.pChars, this.pLength, mutations);
 		}
 
 		for (String[] line : message.getLines()) {
@@ -276,22 +258,20 @@ public class Master extends AbstractLoggingActor {
 			int Id = Integer.parseInt(line[0]);
 			String name = line[1];
 			String password = line[4];
-			String[] hints = IntStream.range(5, line.length-1).mapToObj(i -> line[i]).toArray(String[]::new);
+			String[] hints = IntStream.range(5, line.length).mapToObj(i -> line[i]).toArray(String[]::new);
 			Password pw = new Password(Id, name, password, hints);
             this.passwordMap.put(Id, pw);
             for(String hint : hints){
-            	List<Integer> l = this.hintMap.getOrDefault(hint, new ArrayList<>());
-            	if(l.size() == 0){
-					this.hintMap.put(hint, new ArrayList<Integer>(Id));
+            	if(!this.hintMap.containsKey(hint)){
+					for(char[] mutation: mutations){
+						addTask(new CrackHintMessage(Id, hint, mutation));
+					}
 				} else {
-            		String decoded = this.passwordMap.get(l.get(0)).getHints().get(hint);
-            		crackPassword(pw, hint, decoded);
-            		l.add(Id);
+            		pw.addDecodedHint(hint, this.hintMap.get(hint));
 				}
 			}
 		}
 
-		this.log().info("Finished Setup");
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
 		// this.reader.tell(new Reader.ReadMessage(), this.self());
 	}
@@ -323,51 +303,21 @@ public class Master extends AbstractLoggingActor {
 //		this.log().info("Unregistered {}", message.getActor());
 	}
 
-	protected void handle(Worker.HeapCalculatedMessage message){
-		Iterator<String[]> iter = new Iterator<String[]>() {
-			private int idx =0 ;
-			@Override
-			public boolean hasNext() {
-				return idx < message.getHeaps().size()-1;
-			}
-
-			@Override
-			public String[] next() {
-				int odx = idx;
-				idx+=1000;
-				if(idx > message.getHeaps().size()-1){
-					idx = message.getHeaps().size()-1;
-				}
-				return IntStream.range(odx, idx).mapToObj(c -> message.getHeaps().get(c)).toArray(String[]::new);
-			}
+	protected  void handle(Worker.CrackedHintMessage message){
+		System.out.println(message.getDecoded());
+		this.hintMap.put(message.getHash(), message.getDecoded());
+		if(this.passwordMap.get(message.getId()).addDecodedHint(message.getHash(), message.getDecoded())){
+			addTask(new CrackPasswordMessage(this.passwordMap.get(message.getId()), this.pChars, this.pLength));
 		};
-		while(iter.hasNext()){
-			addTask(new CalculateHashesMessage(iter.next()));
-		}
 	}
 
-	protected void handle(Worker.HashCalculatedMessage message){
-		this.hashMap.put(message.getEncoded(), message.getDecoded());
-	    // retrieve the password id or a default
-	    List<Integer> idx = this.hintMap.getOrDefault(message.getEncoded(), new ArrayList<>());
-	    // is there an encoded hint
-	    if(idx.size() == 0){
-	    	for(int x :idx) {
-				// we get the password class from the passwordmap
-				Password pw = this.passwordMap.get(x);
-				// adding decoded Hint to array;
-				this.log().info("Cracked one hash");
-				crackPassword(pw, message.getEncoded(), message.getDecoded());
-			}
-        }
-    }
-
-    protected void handle(Worker.PasswordCrackedMessage message){
-		Password pw = this.passwordMap.get(message.getId());
-		pw.setDecodedPassword(message.getDecodedPassword());
+	protected void handle(Worker.CrackedPasswordMessage message){
+		this.passwordMap.get(message.getId()).setDecodedPassword(message.getCracked());
+		logSolution(this.passwordMap.get(message.getId()));
+		log().info("Cracked password {} for Id {}", message.getCracked(), message.getId());
 	}
 
-	protected void handle(Worker.WorkerFreeMessage message){
+	protected  void handle(Worker.WorkerFreeMessage message){
 		freeWorker(this.sender());
 	}
 }

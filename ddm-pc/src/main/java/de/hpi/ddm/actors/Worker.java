@@ -3,10 +3,7 @@ package de.hpi.ddm.actors;
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -48,21 +45,17 @@ public class Worker extends AbstractLoggingActor {
 	public static class WorkerFreeMessage {}
 
 	@Data @AllArgsConstructor @NoArgsConstructor
-	public static class HashCalculatedMessage {
-		private String encoded;
-		private String decoded;
-	}
+	public static class CrackedHintMessage {
+	    private int Id;
+	    private String hash;
+	    private String decoded;
+    }
 
-	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class HeapCalculatedMessage {
-		private List<String> heaps;
-	}
-
-	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class PasswordCrackedMessage {
-		private int Id;
-		private String decodedPassword;
-	}
+    @Data @AllArgsConstructor @NoArgsConstructor
+    public static class CrackedPasswordMessage {
+        private int Id;
+        private String cracked;
+    }
 
 	/////////////////
 	// Actor State //
@@ -70,7 +63,11 @@ public class Worker extends AbstractLoggingActor {
 
 	private Member masterSystem;
 	private final Cluster cluster;
-	
+
+	private String hash;
+	private String hint;
+	private boolean isCracked;
+
 	/////////////////////
 	// Actor Lifecycle //
 	/////////////////////
@@ -97,9 +94,8 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
-				.match(Master.CalculateHashesMessage.class, this::handle) // calculate a single hash
-				.match(Master.CalculateHeapMessage.class, this::handle) // calculate heap
-				.match(Master.CrackPasswordMessage.class, this::handle) // crack password
+                .match(Master.CrackHintMessage.class, this::handle)
+                .match(Master.CrackPasswordMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -130,51 +126,59 @@ public class Worker extends AbstractLoggingActor {
 			this.self().tell(PoisonPill.getInstance(), ActorRef.noSender());
 	}
 
-	private void handle(Master.CalculateHeapMessage message){
-		List<String> heaps = new ArrayList<String>();
-		heapPermutation(message.getHeap(), message.getLength(), heaps);
-		this.sender().tell(new HeapCalculatedMessage(heaps), this.self());
-		for(String heap: heaps){
-			this.log().info(heap);
-		}
-		this.sender().tell(new WorkerFreeMessage(), this.self());
-	}
+	private void handle(Master.CrackHintMessage message){
+	    this.hash = message.getHash();
+	    this.isCracked = false;
+	    this.hint= "";
+	    heapPermutation(message.getUniverse(), message.getUniverse().length);
+	    if(this.isCracked)  {
+	        this.sender().tell(new CrackedHintMessage(message.getId(), message.getHash(), this.hint), this.self());
+        }
+	    this.sender().tell(new WorkerFreeMessage(), this.self());
+    }
 
-	private void handle(Master.CalculateHashesMessage message){
-		for(String hint: message.getHash()){
-			this.sender().tell(
-					new HashCalculatedMessage(hint, hash(hint)),
-					this.self()
-			);
-		}
-		this.sender().tell(new WorkerFreeMessage(), this.self());
-	}
-
-	private void handle(Master.CrackPasswordMessage message){
-		Master.Password pw = message.getEntity();
-		List<Character> universe = message.getUniverse().toString().chars().mapToObj(c -> (char) c).collect(Collectors.toList());
-		for (String hint: pw.getHints().values()){
-			for(char c: message.getUniverse()){
-				if(!hint.contains(String.valueOf(c))){
-					universe.remove(c);
-				}
+    private void handle(Master.CrackPasswordMessage message){
+	    this.hash = message.getPw().getEncodedPassword();
+	    this.isCracked = false;
+	    this.hint ="";
+	    List<Character> alphabet = new ArrayList<Character>();
+	    for(char c: message.getUniverse()){
+	    	alphabet.add(c);
+        }
+		for(String hint: message.getPw().getHints().values()){
+            int i = 0;
+		    while(i < alphabet.size()){
+				if(!hint.contains(String.valueOf(alphabet.get(i)))) {
+				    alphabet.remove(i);
+                } else {
+				    i++;
+                }
 			}
 		}
-		List<String> mutations = new ArrayList<String>();
-		char[] usedChars = new char[universe.size()];
-		for(int i = 0; i< universe.size(); i++){
-			usedChars[i] = universe.get(i);
+	    char[] abc = alphabet.stream().map(String::valueOf).collect(Collectors.joining()).toCharArray();
+		System.out.println(alphabet);
+	    generateCombinations(abc, "", message.getLength(), abc.length);
+	    if(this.isCracked){
+	        this.sender().tell(new CrackedPasswordMessage(message.getPw().getId(), this.hint), this.self());
+        } else {
+	    	this.sender().tell("Couldn't crack password", this.self());
 		}
-		heapPermutation(usedChars, message.getLength(), mutations);
-		for(String mutation: mutations){
-			if(hash(mutation) == message.getEntity().getEncodedPassword()){
-				this.sender().tell(new PasswordCrackedMessage(message.getEntity().getId(), mutation), this.self());
-				return;
-			}
-		}
-	}
-	
-	private String hash(String line) {
+	    this.sender().tell(new WorkerFreeMessage(), this.self());
+    }
+
+    private void generateCombinations(char[] set, String prefix, int n, int k) {
+        if(isCracked) return;
+	    if (k == 0) {
+            if(Objects.equals(hash(prefix), this.hash)){
+                this.isCracked = true;
+                this.hint = prefix;
+            }
+            return;
+        }
+        for (int i = 0; i < n; ++i) generateCombinations(set, prefix + set[i], n, k - 1);
+    }
+
+    private String hash(String line) {
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
 			byte[] hashedBytes = digest.digest(String.valueOf(line).getBytes("UTF-8"));
@@ -193,13 +197,19 @@ public class Worker extends AbstractLoggingActor {
 	// Generating all permutations of an array using Heap's Algorithm
 	// https://en.wikipedia.org/wiki/Heap's_algorithm
 	// https://www.geeksforgeeks.org/heaps-algorithm-for-generating-permutations/
-	private void heapPermutation(char[] a, int size, List<String> l) {
+	private void heapPermutation(char[] a, int size) {
 		// If size is 1, store the obtained permutation
-		if (size == 1)
-			l.add(new String(a));
+        if(this.isCracked) return;
+		if (size == 1) {
+		    String s = hash(new String(a));
+			if (Objects.equals(s, this.hash)) {
+			    this.isCracked = true;
+			    this.hint = new String(a);
+            }
+		}
 
 		for (int i = 0; i < size; i++) {
-			heapPermutation(a, size - 1, l);
+			heapPermutation(a, size - 1);
 
 			// If size is odd, swap first and last element
 			if (size % 2 == 1) {
