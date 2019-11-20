@@ -4,7 +4,11 @@ import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import akka.actor.AbstractLoggingActor;
 import akka.actor.ActorRef;
@@ -41,6 +45,8 @@ public class Worker extends AbstractLoggingActor {
 	// Actor Messages //
 	////////////////////
 
+	public static class WorkerFreeMessage {}
+
 	@Data @AllArgsConstructor @NoArgsConstructor
 	public static class HashCalculatedMessage {
 		private String encoded;
@@ -49,12 +55,13 @@ public class Worker extends AbstractLoggingActor {
 
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class HeapCalculatedMessage {
-		private String[] heaps;
+		private List<String> heaps;
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class RegisterToWorkloadMessage {
-		private String identifier;
+	public static class PasswordCrackedMessage {
+		private int Id;
+		private String decodedPassword;
 	}
 
 	/////////////////
@@ -90,8 +97,9 @@ public class Worker extends AbstractLoggingActor {
 				.match(CurrentClusterState.class, this::handle)
 				.match(MemberUp.class, this::handle)
 				.match(MemberRemoved.class, this::handle)
-				.match(Master.CalculateHashMessage.class, this::handle)
-				.match(Master.CalculateHeapMessage.class, this::handle)
+				.match(Master.CalculateHashesMessage.class, this::handle) // calculate a single hash
+				.match(Master.CalculateHeapMessage.class, this::handle) // calculate heap
+				.match(Master.CrackPasswordMessage.class, this::handle) // crack password
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -123,14 +131,47 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(Master.CalculateHeapMessage message){
-		this.sender().tell(new RegisterToWorkloadMessage(message.getIdentifier()), this.self());
 		List<String> heaps = new ArrayList<String>();
 		heapPermutation(message.getHeap(), message.getLength(), heaps);
-		this.sender().tell(new HeapCalculatedMessage(heaps.toArray(new String[heaps.size()])), this.self());
+		this.sender().tell(new HeapCalculatedMessage(heaps), this.self());
+		for(String heap: heaps){
+			this.log().info(heap);
+		}
+		this.sender().tell(new WorkerFreeMessage(), this.self());
 	}
 
-	private void handle(Master.CalculateHashMessage message){
-		this.sender().tell(new RegisterToWorkloadMessage(message.getIdentifier()), this.self());
+	private void handle(Master.CalculateHashesMessage message){
+		for(String hint: message.getHash()){
+			this.sender().tell(
+					new HashCalculatedMessage(hint, hash(hint)),
+					this.self()
+			);
+		}
+		this.sender().tell(new WorkerFreeMessage(), this.self());
+	}
+
+	private void handle(Master.CrackPasswordMessage message){
+		Master.Password pw = message.getEntity();
+		List<Character> universe = message.getUniverse().toString().chars().mapToObj(c -> (char) c).collect(Collectors.toList());
+		for (String hint: pw.getHints().values()){
+			for(char c: message.getUniverse()){
+				if(!hint.contains(String.valueOf(c))){
+					universe.remove(c);
+				}
+			}
+		}
+		List<String> mutations = new ArrayList<String>();
+		char[] usedChars = new char[universe.size()];
+		for(int i = 0; i< universe.size(); i++){
+			usedChars[i] = universe.get(i);
+		}
+		heapPermutation(usedChars, message.getLength(), mutations);
+		for(String mutation: mutations){
+			if(hash(mutation) == message.getEntity().getEncodedPassword()){
+				this.sender().tell(new PasswordCrackedMessage(message.getEntity().getId(), mutation), this.self());
+				return;
+			}
+		}
 	}
 	
 	private String hash(String line) {

@@ -30,15 +30,12 @@ public class Master extends AbstractLoggingActor {
 	public Master(final ActorRef reader, final ActorRef collector) {
 		this.reader = reader;
 		this.collector = collector;
-		this.hashMap = new HashMap<String, String>();
-		this.hintMap = new HashMap<String, Integer>();
+		this.hintMap = new HashMap<String, List<Integer>>();
 		this.passwordMap = new HashMap<Integer, Password>();
 		this.workerInUseMap = new HashMap<ActorRef, Boolean>();
-		this.taskAssignment = new HashMap<String, ActorRef>();
-		this.tasks = new HashMap<String, WorkloadMessage>();
+		this.hashMap = new HashMap<String, String>();
 		this.mutations = new ArrayList<char[]>();
-		this.heaps = new ArrayList<String>();
-		this.tasksPipe = new ArrayList<String>();
+		this.tasksPipe = new ArrayList<WorkloadMessage>();
 	}
 
 	////////////////////
@@ -66,11 +63,9 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class CalculateHashMessage implements WorkloadMessage {
-		private String hash;
-		public String getIdentifier(){
-			return "CalculateHash: ".concat(this.hash);
-		};
+	public static class CalculateHashesMessage implements WorkloadMessage {
+		private String[] hash;
+		public String getIdentifier(){ return "CalculateHashes: ".concat(this.hash[0]); };
 	}
 
 
@@ -78,9 +73,15 @@ public class Master extends AbstractLoggingActor {
 	public static class CalculateHeapMessage implements WorkloadMessage {
 		private char[] heap;
 		private int length;
-		public String getIdentifier(){
-			return "CalculateHeap: ".concat(this.heap.toString());
-		}
+		public String getIdentifier(){ return "CalculateHeap: ".concat(new String(this.heap)); }
+	}
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	public static class CrackPasswordMessage implements WorkloadMessage {
+		private Password entity;
+		private int length;
+		private char[] universe;
+		public String getIdentifier() { return "CrackPassword: ".concat(String.valueOf(this.entity.getId())); }
 	}
 
 	/////////////////
@@ -88,22 +89,29 @@ public class Master extends AbstractLoggingActor {
 	/////////////////
 
 	@Data
-	private class Password {
-		private int ID;
+	protected class Password {
+		private int Id;
 		private String name;
-		private String[] encodedHints;
-		private String[] decodedHints;
+		private HashMap<String, String> hints;
 		private String encodedPassword;
 		private String decodedPassword;
 
 
         public Password(int Id, String name, String password, String[] hints){
-		    this.ID = Id;
+		    this.Id = Id;
 		    this.name = name;
 		    this.encodedPassword = password;
-		    this.encodedHints = hints;
-		    this.decodedHints = new String[hints.length];
+		    this.decodedPassword = "";
+		    this.hints = new HashMap<>();
+		    for(String hint: hints){
+		    	this.hints.put(hint, "");
+			}
         }
+
+        public boolean addDecodedHint(String hash, String hint){
+			this.hints.put(hash, hint);
+			return this.hints.values().contains("");
+		}
 	}
 
 	private final ActorRef reader;
@@ -114,22 +122,16 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
-	// hash to letter combination
 	private HashMap<String, String> hashMap;
 	// hint hash to an int (id)
-	private HashMap<String, Integer> hintMap;
+	private HashMap<String, List<Integer>> hintMap;
 	// id to the password class
 	private HashMap<Integer, Password> passwordMap;
-	// way to identify if worker is in use or not
+	// way to identify if worker is in use or not boolean value inUse = true; notinUse = false
 	private HashMap<ActorRef, Boolean> workerInUseMap;
-	// way to find out which task is assigned to which worker
-	private HashMap<String, ActorRef> taskAssignment;
-	// list of available tasks
-	private HashMap<String,WorkloadMessage> tasks;
 
 	private List<char[]> mutations;
-	private List<String> heaps;
-	private List<String> tasksPipe;
+	private List<WorkloadMessage> tasksPipe;
 
 	/////////////////////
 	// Actor Lifecycle //
@@ -151,22 +153,91 @@ public class Master extends AbstractLoggingActor {
 				.match(Terminated.class, this::handle)
 				.match(RegistrationMessage.class, this::handle)
 				.match(BatchMessage.class, this::handle) //1
-				.match(Worker.RegisterToWorkloadMessage.class, this::handle)
-				.match(Worker.HeapCalculatedMessage.class, this::handle)//2 TODO: Add message reception of worker acknowledgment and task reception
-				// 3 TODO: Add handler for worker assignment on parallel list
-                .match(Worker.HashCalculatedMessage.class, this::handle) //When worker sends work calculated
+				.match(Worker.HeapCalculatedMessage.class, this::handle) // calculated a heap
+                .match(Worker.HashCalculatedMessage.class, this::handle) // When worker sends work calculated
+				.match(Worker.PasswordCrackedMessage.class, this::handle) // Password got cracked
+				.match(Worker.WorkerFreeMessage.class, this::handle) // When worker is free again
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
 
-	// TODO Handle Freeing and occupying workers
-	protected void assignTask(){
-		while(this.tasks.size() != 0 && this.workerInUseMap.values().contains(true)){
+	private void getMutations(char[] data, int dlength, int length, char[] imt, int idx, int i, List<char[]> list){
+		if(idx == length){
+			list.add(imt);
+			return;
+		}
+		if(i >= dlength) {
+			return;
+		}
+		imt[idx] = data[i];
+		System.out.println(imt);
+		getMutations(data, dlength, length, imt, idx+1, i+1, list);
+		getMutations(data, dlength, length, imt, idx, i+1, list);
+	}
+
+	private void addTask(WorkloadMessage m){
+		this.tasksPipe.add(m);
+		if(assignTask()){
+			this.collector.tell(new Collector.PrintMessage(), this.self());
+			this.terminate();
+			return;
+		}
+	}
+
+	private boolean assignTask(){
+		int freeWorkers = 0;
+		for(boolean occupied: workerInUseMap.values()){
+			if(!occupied){
+				freeWorkers++;
+			}
+		}
+		this.log().info("Having {} open tasks for {} workers", this.tasksPipe.size(), freeWorkers);
+		while(this.tasksPipe.size() != 0 && this.workerInUseMap.values().contains(false)){
 			for (Map.Entry<ActorRef, Boolean> worker: this.workerInUseMap.entrySet()){
 				if(!worker.getValue()){
-					worker.getKey().tell(this.tasks.get(this.tasksPipe.get(0)), this.self());
+					WorkloadMessage task =this.tasksPipe.remove(0);
+					worker.getKey().tell(task, this.self());
+					occupyWorker(worker.getKey());
+					this.log().info("Now assigning task {}", task.getIdentifier());
+					break;
 				}
 			}
+		}
+		for(Password pw: this.passwordMap.values()){
+			if(pw.getDecodedPassword() == ""){
+				return false;
+			}
+		}
+		return this.passwordMap.size() != 0 && tasksPipe.size() == 0;
+	}
+
+	private void occupyWorker(ActorRef worker) {
+		workerInUseMap.put(worker, true);
+	}
+
+	private void  freeWorker(ActorRef worker) {
+		workerInUseMap.put(worker, false);
+		if(assignTask()){
+			this.collector.tell(new Collector.PrintMessage(), this.self());
+			this.terminate();
+			return;
+		}
+	}
+
+	private void logSolution(Password pw){
+		this.collector.tell(new Collector.CollectMessage(
+						"Cracked Password of "
+								.concat(pw.getName()).
+								concat(" with ID ")
+								.concat(String.valueOf(pw.getId()))
+								.concat(". The password is ")
+								.concat(pw.getDecodedPassword())),
+				this.self());
+	}
+
+	private void crackPassword(Password pw, String encoded, String decoded){
+		if(pw.addDecodedHint(encoded, decoded)){
+			addTask(new CrackPasswordMessage(pw, this.pLength, this.pChars));
 		}
 	}
 
@@ -184,59 +255,45 @@ public class Master extends AbstractLoggingActor {
 		// 2. If we process the batches early, we can achieve latency hiding. /////////////////////////////////
 		// TODO: Implement the processing of the data for the concrete assignment. ////////////////////////////
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
-		
 		if (message.getLines().isEmpty()) {
-			this.collector.tell(new Collector.PrintMessage(), this.self());
-			this.terminate();
 			return;
 		}
-
 		// We want to retrieve the password length and password chars from the lines
 		// And then add it to the state (and maybe throw an error if the state is'nt the same as read)
-		this.pLength = Integer.parseInt(message.getLines().get(0)[3]);
-		this.pChars = message.getLines().get(0)[2].toCharArray();
-		// now we can add all permutations with one missing letter to our state
-		for(int i = 0; i < this.pChars.length; i++){
-			char[] sub = new char[this.pChars.length-1];
-			int k = 0;
-			for (int j = 0; j < this.pChars.length; j++) {
-				if(j!=i) {
-					sub[k++] = this.pChars[j];
-				}
+		if(this.pLength != Integer.parseInt(message.getLines().get(0)[3])) {
+			this.pLength = Integer.parseInt(message.getLines().get(0)[3]);
+			this.pChars = message.getLines().get(0)[2].toCharArray();
+			List<char[]> mutations = new ArrayList<>();
+			getMutations(this.pChars, this.pChars.length, this.pLength, new char[this.pLength], 0, 0, mutations);
+			for(char[] mutation: mutations){
+				this.log().info(new String(mutation));
+				addTask(new CalculateHeapMessage(mutation, this.pLength));
 			}
-			System.out.println(sub);
-			this.mutations.add(sub);
 		}
 
-		// As soon as we know this we want to start calculating and shooting messages to every available worker
-		// We want to cleverly chunk the options here...
-		// Maybe we should delegate this even further from the worker
-		for(char[] mutation: this.mutations){
-			WorkloadMessage m = new CalculateHeapMessage(mutation, this.pLength);
-			this.tasks.put(m.getIdentifier(), m);
-			this.tasksPipe.add(m.getIdentifier());
-		}
-
-		assignTask();
-
-		//TODO: Move this into another response (when master is sure that workers got the work load)
 		for (String[] line : message.getLines()) {
 			// We also want to start creating this wonderful hashmap where we store the hash as key with the corresponding string it generates
 			int Id = Integer.parseInt(line[0]);
 			String name = line[1];
 			String password = line[4];
-			String[] hints = IntStream.range(5, line.length).mapToObj(i -> line[i]).toArray(String[]::new);
-            this.passwordMap.put(Id, new Password(Id, name, password, hints));
-			this.hashMap.put(password, "");
+			String[] hints = IntStream.range(5, line.length-1).mapToObj(i -> line[i]).toArray(String[]::new);
+			Password pw = new Password(Id, name, password, hints);
+            this.passwordMap.put(Id, pw);
             for(String hint : hints){
-				this.hintMap.put(hint, Id);
-				this.hashMap.put(hint, "");
+            	List<Integer> l = this.hintMap.getOrDefault(hint, new ArrayList<>());
+            	if(l.size() == 0){
+					this.hintMap.put(hint, new ArrayList<Integer>(Id));
+				} else {
+            		String decoded = this.passwordMap.get(l.get(0)).getHints().get(hint);
+            		crackPassword(pw, hint, decoded);
+            		l.add(Id);
+				}
 			}
-			System.out.println(Arrays.toString(line));
 		}
 
+		this.log().info("Finished Setup");
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
-		this.reader.tell(new Reader.ReadMessage(), this.self());
+		// this.reader.tell(new Reader.ReadMessage(), this.self());
 	}
 	
 	protected void terminate() {
@@ -256,7 +313,7 @@ public class Master extends AbstractLoggingActor {
 
 	protected void handle(RegistrationMessage message) {
 		this.context().watch(this.sender());
-		this.workerInUseMap.put(this.sender(), false);
+		freeWorker(this.sender());
 //		this.log().info("Registered {}", this.sender());
 	}
 	
@@ -266,36 +323,51 @@ public class Master extends AbstractLoggingActor {
 //		this.log().info("Unregistered {}", message.getActor());
 	}
 
-	protected void handle(Worker.RegisterToWorkloadMessage message) {
-		workerInUseMap.put(this.sender(), true);
-		taskAssignment.put(message.getIdentifier(),this.sender());
-		this.tasks.remove(message.getIdentifier());
-		this.tasksPipe.remove(message.getIdentifier());
-	}
-
 	protected void handle(Worker.HeapCalculatedMessage message){
-		for(String heap: message.getHeaps()){
-			if(!heaps.contains(heap)){
-				heaps.add(heap);
+		Iterator<String[]> iter = new Iterator<String[]>() {
+			private int idx =0 ;
+			@Override
+			public boolean hasNext() {
+				return idx < message.getHeaps().size()-1;
 			}
+
+			@Override
+			public String[] next() {
+				int odx = idx;
+				idx+=1000;
+				if(idx > message.getHeaps().size()-1){
+					idx = message.getHeaps().size()-1;
+				}
+				return IntStream.range(odx, idx).mapToObj(c -> message.getHeaps().get(c)).toArray(String[]::new);
+			}
+		};
+		while(iter.hasNext()){
+			addTask(new CalculateHashesMessage(iter.next()));
 		}
 	}
 
 	protected void handle(Worker.HashCalculatedMessage message){
-		// put it in the hashmap for later use
-	    this.hashMap.put(message.getEncoded(), message.getDecoded());
+		this.hashMap.put(message.getEncoded(), message.getDecoded());
 	    // retrieve the password id or a default
-	    int idx = this.hintMap.getOrDefault(message.getEncoded(), -1);
+	    List<Integer> idx = this.hintMap.getOrDefault(message.getEncoded(), new ArrayList<>());
 	    // is there an encoded hint
-	    if(idx != -1){
-	    	// we get the password class from the passwordmap
-	        Password pw = this.passwordMap.get(idx);
-	        // adding decoded Hint to array;
-	        for(int i= 0; i< pw.encodedHints.length; i++){
-	            if(pw.encodedHints[i] == message.getEncoded()){
-	                pw.decodedHints[i] = message.getDecoded();
-                }
-            }
+	    if(idx.size() == 0){
+	    	for(int x :idx) {
+				// we get the password class from the passwordmap
+				Password pw = this.passwordMap.get(x);
+				// adding decoded Hint to array;
+				this.log().info("Cracked one hash");
+				crackPassword(pw, message.getEncoded(), message.getDecoded());
+			}
         }
     }
+
+    protected void handle(Worker.PasswordCrackedMessage message){
+		Password pw = this.passwordMap.get(message.getId());
+		pw.setDecodedPassword(message.getDecodedPassword());
+	}
+
+	protected void handle(Worker.WorkerFreeMessage message){
+		freeWorker(this.sender());
+	}
 }
