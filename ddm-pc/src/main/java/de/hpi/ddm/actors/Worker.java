@@ -36,6 +36,8 @@ public class Worker extends AbstractLoggingActor {
 
 	public Worker() {
 		this.cluster = Cluster.get(this.context().system());
+		this.hashes = new HashMap<>();
+		this.hints = new HashMap<>();
 	}
 	
 	////////////////////
@@ -43,6 +45,8 @@ public class Worker extends AbstractLoggingActor {
 	////////////////////
 
 	public static class WorkerFreeMessage {}
+
+	public static class WorkerFullMessage {}
 
 	@Data @AllArgsConstructor @NoArgsConstructor
 	public static class CrackedHintMessage {
@@ -57,11 +61,6 @@ public class Worker extends AbstractLoggingActor {
         private String cracked;
     }
 
-    @Data @AllArgsConstructor @NoArgsConstructor
-	public static class CrackedHashMessage {
-		private String encoded;
-		private String decoded;
-	}
 
 	/////////////////
 	// Actor State //
@@ -70,10 +69,13 @@ public class Worker extends AbstractLoggingActor {
 	private Member masterSystem;
 	private final Cluster cluster;
 
+	private HashMap<String, Integer> hashes;
+	private HashMap<String, String> hints;
+	private ActorRef master;
 
-	private String hash;
-	private String hint;
 	private boolean isCracked;
+	private String password;
+	private String hash;
 
 	/////////////////////
 	// Actor Lifecycle //
@@ -103,6 +105,7 @@ public class Worker extends AbstractLoggingActor {
 				.match(MemberRemoved.class, this::handle)
                 .match(Master.CrackHintMessage.class, this::handle)
                 .match(Master.CrackPasswordMessage.class, this::handle)
+				.match(Master.StartCrackingMessage.class, this:: handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -134,20 +137,25 @@ public class Worker extends AbstractLoggingActor {
 	}
 
 	private void handle(Master.CrackHintMessage message){
-	    this.hash = message.getHash();
-	    this.isCracked = false;
-	    this.hint= "";
-	    heapPermutation(message.getUniverse(), message.getUniverse().length);
-	    if(this.isCracked)  {
-	        this.sender().tell(new CrackedHintMessage(message.getId(), message.getHash(), this.hint), this.self());
-        }
-	    this.sender().tell(new WorkerFreeMessage(), this.self());
+		this.master = this.sender();
+	    this.hashes.put(message.getHash(), message.getId());
+	    if(hashes.size() < 100){
+	    	this.sender().tell(new WorkerFreeMessage(), this.self());
+		} else {
+	    	this.sender().tell(new WorkerFullMessage(), this.self());
+		}
     }
 
+    private void handle(Master.StartCrackingMessage message){
+		log().info("Started cracking hints in universe {}", new String(message.getUniverse()));
+		heapPermutation(message.getUniverse(), message.getUniverse().length);
+		this.sender().tell(new WorkerFreeMessage(), this.self());
+	}
+
     private void handle(Master.CrackPasswordMessage message){
-	    this.hash = message.getPw().getEncodedPassword();
-	    this.isCracked = false;
-	    this.hint ="";
+		this.hash = message.getPw().getEncodedPassword();
+		this.isCracked = false;
+		this.password = "";
 	    HashSet<Character> alphabet = new HashSet<Character>();
 		for(String hint: message.getPw().getHints().values()){
             for (char c: message.getUniverse()){
@@ -163,19 +171,24 @@ public class Worker extends AbstractLoggingActor {
 		}
 	    generateCombinations(abc, "",  abc.length, message.getLength());
 	    if(this.isCracked){
-	        this.sender().tell(new CrackedPasswordMessage(message.getPw().getId(), this.hint), this.self());
+	        this.sender().tell(new CrackedPasswordMessage(message.getPw().getId(), this.password), this.self());
         } else {
 	    	this.sender().tell("Couldn't crack password", this.self());
 		}
 	    this.sender().tell(new WorkerFreeMessage(), this.self());
     }
 
+    private void foundHint(String hash, String hint){
+		int Id = this.hashes.remove(hash);
+		this.master.tell(new CrackedHintMessage(Id, hash, hint), this.self());
+	}
+
     private void generateCombinations(char[] set, String prefix, int n, int k) {
         if(isCracked) return;
 	    if (k == 0) {
             if(Objects.equals(hash(prefix), this.hash)){
                 this.isCracked = true;
-                this.hint = prefix;
+                this.password = prefix;
             }
             return;
         }
@@ -206,11 +219,11 @@ public class Worker extends AbstractLoggingActor {
         if(this.isCracked) return;
 		if (size == 1) {
 			String c = new String(a);
-		    String s = hash(c);
-		    if (Objects.equals(s, this.hash)) {
-			    this.isCracked = true;
-			    this.hint =c;
-            }
+		    String h = hash(c);
+			HashMap<String, Integer> hs = (HashMap<String, Integer>) this.hashes.clone();
+		    for(String s: hs.keySet()){
+		    	if(Objects.equals(h, s)) foundHint(h, c);
+			}
 		}
 
 		for (int i = 0; i < size; i++) {

@@ -30,9 +30,10 @@ public class Master extends AbstractLoggingActor {
 	public Master(final ActorRef reader, final ActorRef collector) {
 		this.reader = reader;
 		this.collector = collector;
-		this.hintMap = new HashMap<String, String>();
 		this.passwordMap = new HashMap<Integer, Password>();
 		this.workerInUseMap = new HashMap<ActorRef, Boolean>();
+		this.universeMessageMapper = new HashMap<>();
+		this.universeWorkerMapper = new HashMap<>();
 		this.mutations = new ArrayList<char[]>();
 		this.tasksPipe = new ArrayList<WorkloadMessage>();
 	}
@@ -65,8 +66,14 @@ public class Master extends AbstractLoggingActor {
 	public static class CrackHintMessage implements WorkloadMessage {
 		private int Id;
 		private String hash;
+		public String getIdentifier() { return "CrackHint: ".concat(hash); }
+	}
+
+
+	@Data @NoArgsConstructor @AllArgsConstructor
+	public static class StartCrackingMessage implements WorkloadMessage {
 		private char[] universe;
-		public String getIdentifier() { return "CrackHint: ".concat(hash).concat(" wtih Universe ").concat(new String(universe)); }
+		public String getIdentifier() { return "StartCracking: ".concat(new String(universe)); }
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
@@ -124,7 +131,8 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
-	private HashMap<String, String> hintMap;
+	private HashMap<char[], List<WorkloadMessage>> universeMessageMapper;
+	private HashMap<char[], ActorRef> universeWorkerMapper;
 	// id to the password class
 	private HashMap<Integer, Password> passwordMap;
 	// way to identify if worker is in use or not boolean value inUse = true; notinUse = false
@@ -156,21 +164,21 @@ public class Master extends AbstractLoggingActor {
 				.match(Worker.CrackedHintMessage.class, this::handle)
 				.match(Worker.WorkerFreeMessage.class, this::handle)
 				.match(Worker.CrackedPasswordMessage.class, this::handle)
-				.match(Worker.CrackedHashMessage.class, this::handle)
+				.match(Worker.WorkerFullMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
 
-	private void getMutations(char[] data, int length, List<char[]> list){
-		char[] imt = new char[data.length-1];
-		for(int x = 0; x < data.length; x++){
+	private void getMutations(char[] data, int length, List<char[]> list) {
+		char[] imt = new char[data.length - 1];
+		for (int x = 0; x < data.length; x++) {
 			int i = 0;
-			for(int j = 0; j < data.length; j++){
-				if(j!=x){
+			for (int j = 0; j < data.length; j++) {
+				if (j != x) {
 					imt[i++] = data[j];
 				}
 			}
-			if(imt.length == length){
+			if (imt.length == length) {
 				list.add(imt.clone());
 			} else {
 				getMutations(imt, length, list);
@@ -178,29 +186,63 @@ public class Master extends AbstractLoggingActor {
 		}
 	}
 
-	private void addTask(WorkloadMessage m){
+	private void addTask(CrackHintMessage crackHintMessage, char[] mutation) {
+		try {
+			List<WorkloadMessage> messagequeue = this.universeMessageMapper.get(mutation);
+			messagequeue.add(crackHintMessage);
+		} catch (NullPointerException e){
+			List<WorkloadMessage> l = new ArrayList<WorkloadMessage>();
+			l.add(crackHintMessage);
+			this.universeMessageMapper.put(mutation, l);
+		}
+		assignTask();
+	}
+
+	private void addTask(StartCrackingMessage m, char[] u){
+		this.universeMessageMapper.get(u).add(m);
+		assignTask();
+	}
+
+	private void addTask(CrackPasswordMessage m){
 		this.tasksPipe.add(m);
 		if(assignTask()){
+			log().info("Now requesting new batch");
 			this.collector.tell(new Collector.PrintMessage(), this.self());
 			this.reader.tell(new Reader.ReadMessage(), this.self());
 		}
 	}
 
+	private ActorRef assignTask(WorkloadMessage task){
+		for (Map.Entry<ActorRef, Boolean> worker: this.workerInUseMap.entrySet()){
+			if(!worker.getValue()){
+				assignTask(task, worker.getKey());
+				return worker.getKey();
+			}
+		}
+		return (ActorRef) this.workerInUseMap.keySet().toArray()[0];
+	}
+
+	private void assignTask(WorkloadMessage task, ActorRef worker){
+		worker.tell(task, this.self());
+		occupyWorker(worker);
+	}
+
 	private boolean assignTask(){
-		while(this.tasksPipe.size() != 0 && this.workerInUseMap.values().contains(false)){
-			for (Map.Entry<ActorRef, Boolean> worker: this.workerInUseMap.entrySet()){
-				if(!worker.getValue()){
-					WorkloadMessage task = this.tasksPipe.remove(0);
-					if(Objects.equals(task.getClass(), CrackHintMessage.class)){
-						CrackHintMessage t = (CrackHintMessage)	task;
-						if(this.hintMap.containsKey(t.getHash())) {
-							this.passwordMap.get(t.getId()).addDecodedHint(t.getHash(), this.hintMap.get(t.getHash()));
-							break;
-						}
+		if(this.workerInUseMap.values().contains(false)){
+			if(this.tasksPipe.size() != 0){
+				WorkloadMessage task = this.tasksPipe.remove(0);
+				assignTask(task);
+			}
+			for(Map.Entry<char[], List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
+				if(e.getValue().size() > 0){
+					WorkloadMessage m = e.getValue().remove(0);
+					try{
+						ActorRef worker = this.universeWorkerMapper.get(e.getKey());
+						assignTask(m, worker);
+					} catch (NullPointerException err){
+						ActorRef w = assignTask(m);
+						this.universeWorkerMapper.put(e.getKey(), w);
 					}
-					worker.getKey().tell(task, this.self());
-					occupyWorker(worker.getKey());
-					break;
 				}
 			}
 		}
@@ -234,7 +276,6 @@ public class Master extends AbstractLoggingActor {
 
 	protected void handle(StartMessage message) {
 		this.startTime = System.currentTimeMillis();
-		
 		this.reader.tell(new Reader.ReadMessage(), this.self());
 	}
 	
@@ -266,20 +307,21 @@ public class Master extends AbstractLoggingActor {
 			String[] hints = IntStream.range(5, line.length).mapToObj(i -> line[i]).toArray(String[]::new);
 			Password pw = new Password(Id, name, password, hints);
             this.passwordMap.put(Id, pw);
-            for(String hint : hints){
-            	if(!this.hintMap.containsKey(hint)){
-					for(char[] mutation: mutations){
-						addTask(new CrackHintMessage(Id, hint, mutation.clone()));
-					}
-				} else {
-            		pw.addDecodedHint(hint, this.hintMap.get(hint));
+			for(char[] mutation: mutations){
+				for(String hint : hints){
+					addTask(new CrackHintMessage(Id, hint), mutation);
 				}
 			}
 		}
+		for(char[] mutation: mutations){
+			addTask(new StartCrackingMessage(mutation.clone()), mutation);
+		}
+		log().info("Finished setup");
 
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
 	}
-	
+
+
 	protected void terminate() {
 		this.reader.tell(PoisonPill.getInstance(), ActorRef.noSender());
 		this.collector.tell(PoisonPill.getInstance(), ActorRef.noSender());
@@ -308,22 +350,26 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.CrackedHintMessage message){
-		this.hintMap.put(message.getHash(), message.getDecoded());
+		log().info("Cracked Hint {} as {}", message.getHash(), message.getDecoded());
 		if(this.passwordMap.get(message.getId()).addDecodedHint(message.getHash(), message.getDecoded())){
 			addTask(new CrackPasswordMessage((Password) this.passwordMap.get(message.getId()).clone(), this.pChars.clone(), this.pLength));
 		};
 	}
 
 	protected void handle(Worker.CrackedPasswordMessage message){
+		log().info("Cracked Password {} for {}", message.getCracked(), message.getId());
 		this.passwordMap.get(message.getId()).setDecodedPassword(message.getCracked());
 		logSolution(this.passwordMap.get(message.getId()));
 	}
 
-	public void handle(Worker.CrackedHashMessage message){
-		this.hintMap.put(message.getEncoded(), message.getEncoded());
+
+	protected void handle(Worker.WorkerFreeMessage message){
+		freeWorker(this.sender());
 	}
 
-	protected  void handle(Worker.WorkerFreeMessage message){
-		freeWorker(this.sender());
+	protected void handle(Worker.WorkerFullMessage message){
+		for(Map.Entry<char[], ActorRef> e: universeWorkerMapper.entrySet()) {
+			if (this.sender() == e.getValue()) this.sender().tell(new StartCrackingMessage(e.getKey()), this.self());;
+		}
 	}
 }
