@@ -181,6 +181,7 @@ public class Master extends AbstractLoggingActor {
 	private void addTask(WorkloadMessage m){
 		this.tasksPipe.add(m);
 		if(assignTask()){
+			this.collector.tell(new Collector.PrintMessage(), this.self());
 			this.reader.tell(new Reader.ReadMessage(), this.self());
 		}
 	}
@@ -217,11 +218,7 @@ public class Master extends AbstractLoggingActor {
 
 	private void  freeWorker(ActorRef worker) {
 		workerInUseMap.put(worker, false);
-		if(assignTask()){
-			this.collector.tell(new Collector.PrintMessage(), this.self());
-			this.terminate();
-			return;
-		}
+		assignTask();
 	}
 
 	private void logSolution(Password pw){
@@ -250,7 +247,6 @@ public class Master extends AbstractLoggingActor {
 		// TODO: Implement the processing of the data for the concrete assignment. ////////////////////////////
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
 		if (message.getLines().isEmpty()) {
-			this.collector.tell(new Collector.PrintMessage(), this.self());
 			this.terminate();
 			return;
 		}

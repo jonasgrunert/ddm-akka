@@ -70,6 +70,7 @@ public class Worker extends AbstractLoggingActor {
 	private Member masterSystem;
 	private final Cluster cluster;
 
+
 	private String hash;
 	private String hint;
 	private boolean isCracked;
