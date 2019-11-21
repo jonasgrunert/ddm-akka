@@ -205,11 +205,7 @@ public class Master extends AbstractLoggingActor {
 
 	private void addTask(CrackPasswordMessage m){
 		this.tasksPipe.add(m);
-		if(assignTask()){
-			log().info("Now requesting new batch");
-			this.collector.tell(new Collector.PrintMessage(), this.self());
-			this.reader.tell(new Reader.ReadMessage(), this.self());
-		}
+		assignTask();
 	}
 
 	private ActorRef assignTask(WorkloadMessage task){
@@ -227,7 +223,7 @@ public class Master extends AbstractLoggingActor {
 		occupyWorker(worker);
 	}
 
-	private boolean assignTask(){
+	private void assignTask(){
 		if(this.workerInUseMap.values().contains(false)){
 			if(this.tasksPipe.size() != 0){
 				WorkloadMessage task = this.tasksPipe.remove(0);
@@ -246,12 +242,6 @@ public class Master extends AbstractLoggingActor {
 				}
 			}
 		}
-		for(Password pw: this.passwordMap.values()){
-			if(pw.getDecodedPassword() == ""){
-				return false;
-			}
-		}
-		return this.passwordMap.size() != 0 && tasksPipe.size() == 0;
 	}
 
 	private void occupyWorker(ActorRef worker) {
@@ -360,6 +350,17 @@ public class Master extends AbstractLoggingActor {
 		log().info("Cracked Password {} for {}", message.getCracked(), message.getId());
 		this.passwordMap.get(message.getId()).setDecodedPassword(message.getCracked());
 		logSolution(this.passwordMap.get(message.getId()));
+		boolean requestnewBatch = true;
+		for(Password pw: this.passwordMap.values()){
+			if(pw.getDecodedPassword() == ""){
+				requestnewBatch = false;
+			}
+		}
+		if(requestnewBatch){
+			log().info("Now requesting new batch");
+			this.collector.tell(new Collector.PrintMessage(), this.self());
+			this.reader.tell(new Reader.ReadMessage(), this.self());
+		}
 	}
 
 
