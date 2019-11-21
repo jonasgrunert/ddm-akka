@@ -66,7 +66,7 @@ public class Master extends AbstractLoggingActor {
 		private int Id;
 		private String hash;
 		private char[] universe;
-		public String getIdentifier() { return "CrackHint: ".concat(hash); }
+		public String getIdentifier() { return "CrackHint: ".concat(hash).concat(" wtih Universe ").concat(new String(universe)); }
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
@@ -84,15 +84,22 @@ public class Master extends AbstractLoggingActor {
 	/////////////////
 
 	@Data
-	protected class Password {
+	protected class Password implements Cloneable{
 		private int Id;
 		private String name;
 		private HashMap<String, String> hints;
 		private String encodedPassword;
 		private String decodedPassword;
 
+		public Object clone(){
+			try {
+				return super.clone();
+			} catch (CloneNotSupportedException e){
+				return this;
+			}
+		}
 
-        public Password(int Id, String name, String password, String[] hints){
+		public Password(int Id, String name, String password, String[] hints){
 		    this.Id = Id;
 		    this.name = name;
 		    this.encodedPassword = password;
@@ -105,7 +112,7 @@ public class Master extends AbstractLoggingActor {
 
         public boolean addDecodedHint(String hash, String hint){
 			this.hints.put(hash, hint);
-			return this.hints.values().contains("");
+			return !this.hints.values().contains("");
 		}
 	}
 
@@ -149,6 +156,7 @@ public class Master extends AbstractLoggingActor {
 				.match(Worker.CrackedHintMessage.class, this::handle)
 				.match(Worker.WorkerFreeMessage.class, this::handle)
 				.match(Worker.CrackedPasswordMessage.class, this::handle)
+				.match(Worker.CrackedHashMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -173,9 +181,7 @@ public class Master extends AbstractLoggingActor {
 	private void addTask(WorkloadMessage m){
 		this.tasksPipe.add(m);
 		if(assignTask()){
-			this.collector.tell(new Collector.PrintMessage(), this.self());
-			this.terminate();
-			return;
+			this.reader.tell(new Reader.ReadMessage(), this.self());
 		}
 	}
 
@@ -187,6 +193,7 @@ public class Master extends AbstractLoggingActor {
 					if(Objects.equals(task.getClass(), CrackHintMessage.class)){
 						CrackHintMessage t = (CrackHintMessage)	task;
 						if(this.hintMap.containsKey(t.getHash())) {
+							this.passwordMap.get(t.getId()).addDecodedHint(t.getHash(), this.hintMap.get(t.getHash()));
 							break;
 						}
 					}
@@ -243,6 +250,8 @@ public class Master extends AbstractLoggingActor {
 		// TODO: Implement the processing of the data for the concrete assignment. ////////////////////////////
 		///////////////////////////////////////////////////////////////////////////////////////////////////////
 		if (message.getLines().isEmpty()) {
+			this.collector.tell(new Collector.PrintMessage(), this.self());
+			this.terminate();
 			return;
 		}
 		// We want to retrieve the password length and password chars from the lines
@@ -264,7 +273,7 @@ public class Master extends AbstractLoggingActor {
             for(String hint : hints){
             	if(!this.hintMap.containsKey(hint)){
 					for(char[] mutation: mutations){
-						addTask(new CrackHintMessage(Id, hint, mutation));
+						addTask(new CrackHintMessage(Id, hint, mutation.clone()));
 					}
 				} else {
             		pw.addDecodedHint(hint, this.hintMap.get(hint));
@@ -273,7 +282,6 @@ public class Master extends AbstractLoggingActor {
 		}
 
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
-		// this.reader.tell(new Reader.ReadMessage(), this.self());
 	}
 	
 	protected void terminate() {
@@ -303,18 +311,20 @@ public class Master extends AbstractLoggingActor {
 //		this.log().info("Unregistered {}", message.getActor());
 	}
 
-	protected  void handle(Worker.CrackedHintMessage message){
-		System.out.println(message.getDecoded());
+	protected void handle(Worker.CrackedHintMessage message){
 		this.hintMap.put(message.getHash(), message.getDecoded());
 		if(this.passwordMap.get(message.getId()).addDecodedHint(message.getHash(), message.getDecoded())){
-			addTask(new CrackPasswordMessage(this.passwordMap.get(message.getId()), this.pChars, this.pLength));
+			addTask(new CrackPasswordMessage((Password) this.passwordMap.get(message.getId()).clone(), this.pChars.clone(), this.pLength));
 		};
 	}
 
 	protected void handle(Worker.CrackedPasswordMessage message){
 		this.passwordMap.get(message.getId()).setDecodedPassword(message.getCracked());
 		logSolution(this.passwordMap.get(message.getId()));
-		log().info("Cracked password {} for Id {}", message.getCracked(), message.getId());
+	}
+
+	public void handle(Worker.CrackedHashMessage message){
+		this.hintMap.put(message.getEncoded(), message.getEncoded());
 	}
 
 	protected  void handle(Worker.WorkerFreeMessage message){

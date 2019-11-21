@@ -57,6 +57,12 @@ public class Worker extends AbstractLoggingActor {
         private String cracked;
     }
 
+    @Data @AllArgsConstructor @NoArgsConstructor
+	public static class CrackedHashMessage {
+		private String encoded;
+		private String decoded;
+	}
+
 	/////////////////
 	// Actor State //
 	/////////////////
@@ -141,23 +147,20 @@ public class Worker extends AbstractLoggingActor {
 	    this.hash = message.getPw().getEncodedPassword();
 	    this.isCracked = false;
 	    this.hint ="";
-	    List<Character> alphabet = new ArrayList<Character>();
-	    for(char c: message.getUniverse()){
-	    	alphabet.add(c);
-        }
+	    HashSet<Character> alphabet = new HashSet<Character>();
 		for(String hint: message.getPw().getHints().values()){
-            int i = 0;
-		    while(i < alphabet.size()){
-				if(!hint.contains(String.valueOf(alphabet.get(i)))) {
-				    alphabet.remove(i);
-                } else {
-				    i++;
-                }
+            for (char c: message.getUniverse()){
+            	if(!hint.contains(String.valueOf(c))) alphabet.add(c);
 			}
 		}
-	    char[] abc = alphabet.stream().map(String::valueOf).collect(Collectors.joining()).toCharArray();
-		System.out.println(alphabet);
-	    generateCombinations(abc, "", message.getLength(), abc.length);
+	    char[] abc = new char[message.getUniverse().length-alphabet.size()];
+	    int i = 0;
+	    for(char c: message.getUniverse()){
+	    	if(!alphabet.contains(c)){
+	    		abc[i++] = c;
+			}
+		}
+	    generateCombinations(abc, "",  abc.length, message.getLength());
 	    if(this.isCracked){
 	        this.sender().tell(new CrackedPasswordMessage(message.getPw().getId(), this.hint), this.self());
         } else {
@@ -201,10 +204,11 @@ public class Worker extends AbstractLoggingActor {
 		// If size is 1, store the obtained permutation
         if(this.isCracked) return;
 		if (size == 1) {
-		    String s = hash(new String(a));
-			if (Objects.equals(s, this.hash)) {
+			String c = new String(a);
+		    String s = hash(c);
+		    if (Objects.equals(s, this.hash)) {
 			    this.isCracked = true;
-			    this.hint = new String(a);
+			    this.hint =c;
             }
 		}
 
