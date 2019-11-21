@@ -230,14 +230,18 @@ public class Master extends AbstractLoggingActor {
 			}
 			for(Map.Entry<char[], List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
 				if(e.getValue().size() > 0){
-					WorkloadMessage m = e.getValue().remove(0);
+					WorkloadMessage m = e.getValue().get(0);
 					try{
 						ActorRef worker = this.universeWorkerMapper.get(e.getKey());
-						assignTask(m, worker);
+						if(!this.workerInUseMap.get(worker)){
+							assignTask(m, worker);
+							e.getValue().remove(m);
+						}
 					} catch (NullPointerException err){
 						try{
 							ActorRef w = assignTask(m);
 							this.universeWorkerMapper.put(e.getKey(), w);
+							e.getValue().remove(m);
 						} catch(NoWorkerFoundException er) {}
 					}
 				}
