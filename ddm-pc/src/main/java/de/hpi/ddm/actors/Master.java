@@ -90,6 +90,8 @@ public class Master extends AbstractLoggingActor {
 	// Actor State //
 	/////////////////
 
+	private class NoWorkerFoundException extends Exception{}
+
 	@Data
 	protected class Password implements Cloneable{
 		private int Id;
@@ -195,27 +197,24 @@ public class Master extends AbstractLoggingActor {
 			l.add(crackHintMessage);
 			this.universeMessageMapper.put(mutation, l);
 		}
-		assignTask();
 	}
 
 	private void addTask(StartCrackingMessage m, char[] u){
 		this.universeMessageMapper.get(u).add(m);
-		assignTask();
 	}
 
 	private void addTask(CrackPasswordMessage m){
 		this.tasksPipe.add(m);
-		assignTask();
 	}
 
-	private ActorRef assignTask(WorkloadMessage task){
+	private ActorRef assignTask(WorkloadMessage task) throws NoWorkerFoundException{
 		for (Map.Entry<ActorRef, Boolean> worker: this.workerInUseMap.entrySet()){
 			if(!worker.getValue()){
 				assignTask(task, worker.getKey());
 				return worker.getKey();
 			}
 		}
-		return (ActorRef) this.workerInUseMap.keySet().toArray()[0];
+		throw new NoWorkerFoundException();
 	}
 
 	private void assignTask(WorkloadMessage task, ActorRef worker){
@@ -227,7 +226,7 @@ public class Master extends AbstractLoggingActor {
 		if(this.workerInUseMap.values().contains(false)){
 			if(this.tasksPipe.size() != 0){
 				WorkloadMessage task = this.tasksPipe.remove(0);
-				assignTask(task);
+				try { assignTask(task); } catch (NoWorkerFoundException err){};
 			}
 			for(Map.Entry<char[], List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
 				if(e.getValue().size() > 0){
@@ -236,8 +235,10 @@ public class Master extends AbstractLoggingActor {
 						ActorRef worker = this.universeWorkerMapper.get(e.getKey());
 						assignTask(m, worker);
 					} catch (NullPointerException err){
-						ActorRef w = assignTask(m);
-						this.universeWorkerMapper.put(e.getKey(), w);
+						try{
+							ActorRef w = assignTask(m);
+							this.universeWorkerMapper.put(e.getKey(), w);
+						} catch(NoWorkerFoundException er) {}
 					}
 				}
 			}
@@ -248,7 +249,7 @@ public class Master extends AbstractLoggingActor {
 		workerInUseMap.put(worker, true);
 	}
 
-	private void  freeWorker(ActorRef worker) {
+	private void freeWorker(ActorRef worker) {
 		workerInUseMap.put(worker, false);
 		assignTask();
 	}
@@ -308,6 +309,8 @@ public class Master extends AbstractLoggingActor {
 		}
 		log().info("Finished setup");
 
+		assignTask();
+
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
 	}
 
@@ -340,14 +343,13 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.CrackedHintMessage message){
-		log().info("Cracked Hint {} as {}", message.getHash(), message.getDecoded());
+
 		if(this.passwordMap.get(message.getId()).addDecodedHint(message.getHash(), message.getDecoded())){
 			addTask(new CrackPasswordMessage((Password) this.passwordMap.get(message.getId()).clone(), this.pChars.clone(), this.pLength));
 		};
 	}
 
 	protected void handle(Worker.CrackedPasswordMessage message){
-		log().info("Cracked Password {} for {}", message.getCracked(), message.getId());
 		this.passwordMap.get(message.getId()).setDecodedPassword(message.getCracked());
 		logSolution(this.passwordMap.get(message.getId()));
 		boolean requestnewBatch = true;
@@ -357,7 +359,6 @@ public class Master extends AbstractLoggingActor {
 			}
 		}
 		if(requestnewBatch){
-			log().info("Now requesting new batch");
 			this.collector.tell(new Collector.PrintMessage(), this.self());
 			this.reader.tell(new Reader.ReadMessage(), this.self());
 		}

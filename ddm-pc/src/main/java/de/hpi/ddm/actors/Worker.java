@@ -149,6 +149,8 @@ public class Worker extends AbstractLoggingActor {
     private void handle(Master.StartCrackingMessage message){
 		log().info("Started cracking hints in universe {}", new String(message.getUniverse()));
 		heapPermutation(message.getUniverse(), message.getUniverse().length);
+		this.log().info("Worker free");
+		this.hashes.clear();
 		this.sender().tell(new WorkerFreeMessage(), this.self());
 	}
 
