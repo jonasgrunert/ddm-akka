@@ -34,6 +34,7 @@ public class Master extends AbstractLoggingActor {
 		this.workerInUseMap = new HashMap<ActorRef, Boolean>();
 		this.universeMessageMapper = new HashMap<>();
 		this.universeWorkerMapper = new HashMap<>();
+		this.uncrackedHints = new HashMap<>();
 		this.mutations = new ArrayList<char[]>();
 		this.tasksPipe = new ArrayList<WorkloadMessage>();
 	}
@@ -135,6 +136,7 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
+	private HashMap<String, Integer> uncrackedHints;
 	private HashMap<Integer, List<WorkloadMessage>> universeMessageMapper;
 	private HashMap<ActorRef, Integer> universeWorkerMapper;
 	// id to the password class
@@ -239,8 +241,10 @@ public class Master extends AbstractLoggingActor {
 				WorkloadMessage task = this.tasksPipe.remove(0);
 				try { assignTask(task); } catch (NoWorkerFoundException err){};
 			}
+			boolean noTasks = true;
 			for(Map.Entry<Integer, List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
 				if(e.getValue().size() > 0){
+					noTasks = false;
 					WorkloadMessage m = e.getValue().get(0);
 					try{
 						ActorRef worker = getWorkerforUniverse(e.getKey());
@@ -254,6 +258,13 @@ public class Master extends AbstractLoggingActor {
 							this.universeWorkerMapper.put(w, e.getKey());
 							e.getValue().remove(m);
 						} catch(NoWorkerFoundException er) {}
+					}
+				}
+			}
+			if(this.tasksPipe.size() == 0 && noTasks && this.uncrackedHints.size() != 0){
+				for(int i = 0; i <mutations.size(); i++) {
+					for(Map.Entry<String, Integer> h: this.uncrackedHints.entrySet()){
+						addTask(new CrackHintMessage(h.getValue(), h.getKey()), i);
 					}
 				}
 			}
@@ -315,6 +326,7 @@ public class Master extends AbstractLoggingActor {
             this.passwordMap.put(Id, pw);
 			for(int i =0; i<  mutations.size(); i++){
 				for(String hint : hints){
+					uncrackedHints.put(hint, Id);
 					addTask(new CrackHintMessage(Id, hint), i);
 				}
 			}
