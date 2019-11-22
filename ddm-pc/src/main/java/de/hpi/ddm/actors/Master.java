@@ -370,7 +370,7 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.CrackedHintMessage message){
-
+		this.uncrackedHints.remove(message.getHash());
 		if(this.passwordMap.get(message.getId()).addDecodedHint(message.getHash(), message.getDecoded())){
 			Password pw = this.passwordMap.get(message.getId());
 			addTask(new CrackPasswordMessage(
