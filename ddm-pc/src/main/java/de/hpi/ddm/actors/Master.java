@@ -134,7 +134,7 @@ public class Master extends AbstractLoggingActor {
 	private char[] pChars;
 
 	private HashMap<Integer, List<WorkloadMessage>> universeMessageMapper;
-	private HashMap<Integer, ActorRef> universeWorkerMapper;
+	private HashMap<ActorRef, Integer> universeWorkerMapper;
 	// id to the password class
 	private HashMap<Integer, Password> passwordMap;
 	// way to identify if worker is in use or not boolean value inUse = true; notinUse = false
@@ -207,6 +207,13 @@ public class Master extends AbstractLoggingActor {
 		this.tasksPipe.add(m);
 	}
 
+	private ActorRef getWorkerforUniverse(int i) throws NoWorkerFoundException{
+		for(Map.Entry<ActorRef, Integer> e: this.universeWorkerMapper.entrySet()){
+			if(e.getValue() == i) return e.getKey();
+		}
+		throw new NoWorkerFoundException();
+	}
+
 	private ActorRef assignTask(WorkloadMessage task) throws NoWorkerFoundException{
 		for (Map.Entry<ActorRef, Boolean> worker: this.workerInUseMap.entrySet()){
 			if(!worker.getValue()){
@@ -232,15 +239,15 @@ public class Master extends AbstractLoggingActor {
 				if(e.getValue().size() > 0){
 					WorkloadMessage m = e.getValue().get(0);
 					try{
-						ActorRef worker = this.universeWorkerMapper.get(e.getKey());
+						ActorRef worker = getWorkerforUniverse(e.getKey());
 						if(!this.workerInUseMap.get(worker)){
 							assignTask(m, worker);
 							e.getValue().remove(m);
 						}
-					} catch (NullPointerException err){
+					} catch (NoWorkerFoundException err){
 						try{
 							ActorRef w = assignTask(m);
-							this.universeWorkerMapper.put(e.getKey(), w);
+							this.universeWorkerMapper.put(w, e.getKey());
 							e.getValue().remove(m);
 						} catch(NoWorkerFoundException er) {}
 					}
@@ -378,8 +385,6 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.WorkerFullMessage message){
-		for(Map.Entry<Integer, ActorRef> e: universeWorkerMapper.entrySet()) {
-			if (this.sender() == e.getValue()) this.sender().tell(new StartCrackingMessage(mutations.get(e.getKey()).clone()), this.self());;
-		}
+		this.sender().tell(new StartCrackingMessage(mutations.get(universeWorkerMapper.get(this.sender())).clone()), this.self());
 	}
 }
