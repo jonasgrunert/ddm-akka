@@ -147,10 +147,11 @@ public class Worker extends AbstractLoggingActor {
     }
 
     private void handle(Master.StartCrackingMessage message){
-		log().info("Started cracking hints in universe {}", new String(message.getUniverse()));
-		heapPermutation(message.getUniverse(), message.getUniverse().length);
-		this.log().info("Worker free");
+		//log().info("Started cracking {} hints in universe {} with length {}", String.valueOf(this.hashes.size()),new String(message.getUniverse()), String.valueOf(message.getUniverse().length));
+		heapPermutation(message.getUniverse().clone(), message.getUniverse().length);
+		//this.log().info("Worker free");
 		this.hashes.clear();
+		this.hints.clear();
 		this.sender().tell(new WorkerFreeMessage(), this.self());
 	}
 
@@ -177,6 +178,9 @@ public class Worker extends AbstractLoggingActor {
         } else {
 	    	this.sender().tell("Couldn't crack password", this.self());
 		}
+		this.isCracked = false;
+	    this.hash ="";
+	    this.password="";
 	    this.sender().tell(new WorkerFreeMessage(), this.self());
     }
 
@@ -223,9 +227,7 @@ public class Worker extends AbstractLoggingActor {
 			String c = new String(a);
 		    String h = hash(c);
 			HashMap<String, Integer> hs = (HashMap<String, Integer>) this.hashes.clone();
-		    for(String s: hs.keySet()){
-		    	if(Objects.equals(h, s)) foundHint(h, c);
-			}
+		    for(String s: hs.keySet()) if(Objects.equals(h, s)) {foundHint(h, c);}
 		}
 
 		for (int i = 0; i < size; i++) {
