@@ -93,7 +93,7 @@ public class Master extends AbstractLoggingActor {
 	private class NoWorkerFoundException extends Exception{}
 
 	@Data
-	protected class Password implements Cloneable{
+	protected class Password implements Cloneable, Serializable{
 		private int Id;
 		private String name;
 		private HashMap<String, String> hints;
@@ -133,8 +133,8 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
-	private HashMap<char[], List<WorkloadMessage>> universeMessageMapper;
-	private HashMap<char[], ActorRef> universeWorkerMapper;
+	private HashMap<Integer, List<WorkloadMessage>> universeMessageMapper;
+	private HashMap<ActorRef, Integer> universeWorkerMapper;
 	// id to the password class
 	private HashMap<Integer, Password> passwordMap;
 	// way to identify if worker is in use or not boolean value inUse = true; notinUse = false
@@ -189,7 +189,7 @@ public class Master extends AbstractLoggingActor {
 		}
 	}
 
-	private void addTask(CrackHintMessage crackHintMessage, char[] mutation) {
+	private void addTask(CrackHintMessage crackHintMessage, int mutation) {
 		try {
 			List<WorkloadMessage> messagequeue = this.universeMessageMapper.get(mutation);
 			messagequeue.add(crackHintMessage);
@@ -200,13 +200,21 @@ public class Master extends AbstractLoggingActor {
 		}
 	}
 
-	private void addTask(StartCrackingMessage m, char[] u){
+	private void addTask(StartCrackingMessage m, int u){
 		this.universeMessageMapper.get(u).add(m);
 	}
 
 	private void addTask(CrackPasswordMessage m){
 		this.tasksPipe.add(m);
 	}
+
+	private ActorRef getWorkerforUniverse(int i) throws NoWorkerFoundException{
+		for(Map.Entry<ActorRef, Integer> e: this.universeWorkerMapper.entrySet()){
+			if(e.getValue() == i) return e.getKey();
+		}
+		throw new NoWorkerFoundException();
+	}
+
 
 	private ActorRef assignTask(WorkloadMessage task) throws NoWorkerFoundException{
 		for (Map.Entry<ActorRef, Boolean> worker: this.workerInUseMap.entrySet()){
@@ -229,19 +237,19 @@ public class Master extends AbstractLoggingActor {
 				WorkloadMessage task = this.tasksPipe.remove(0);
 				try { assignTask(task); } catch (NoWorkerFoundException err){};
 			}
-			for(Map.Entry<char[], List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
+			for(Map.Entry<Integer, List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
 				if(e.getValue().size() > 0){
 					WorkloadMessage m = e.getValue().get(0);
 					try{
-						ActorRef worker = this.universeWorkerMapper.get(e.getKey());
+						ActorRef worker = getWorkerforUniverse(e.getKey());
 						if(!this.workerInUseMap.get(worker)){
 							assignTask(m, worker);
 							e.getValue().remove(m);
 						}
-					} catch (NullPointerException err){
+					} catch (NoWorkerFoundException err){
 						try{
 							ActorRef w = assignTask(m);
-							this.universeWorkerMapper.put(e.getKey(), w);
+							this.universeWorkerMapper.put(w, e.getKey());
 							e.getValue().remove(m);
 						} catch(NoWorkerFoundException er) {}
 					}
@@ -303,14 +311,14 @@ public class Master extends AbstractLoggingActor {
 			String[] hints = IntStream.range(5, line.length).mapToObj(i -> line[i]).toArray(String[]::new);
 			Password pw = new Password(Id, name, password, hints);
             this.passwordMap.put(Id, pw);
-			for(char[] mutation: mutations){
+			for(int i =0; i<  mutations.size(); i++){
 				for(String hint : hints){
-					addTask(new CrackHintMessage(Id, hint), mutation);
+					addTask(new CrackHintMessage(Id, hint), i);
 				}
 			}
 		}
-		for(char[] mutation: mutations){
-			addTask(new StartCrackingMessage(mutation.clone()), mutation);
+		for(int i=0; i< mutations.size(); i++){
+			addTask(new StartCrackingMessage(mutations.get(i).clone()), i);
 		}
 		log().info("Finished setup");
 
@@ -376,9 +384,7 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.WorkerFullMessage message){
-		for(Map.Entry<char[], ActorRef> e: universeWorkerMapper.entrySet()) {
-			if (this.sender() == e.getValue()) this.sender().tell(new StartCrackingMessage(e.getKey()), this.self());;
-		}
+		this.sender().tell(new StartCrackingMessage(mutations.get(universeWorkerMapper.get(this.sender())).clone()), this.self());
 	}
 
 	protected void handle(Worker.FreeUniverseMessage message) {
