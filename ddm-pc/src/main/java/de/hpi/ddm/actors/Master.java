@@ -167,6 +167,7 @@ public class Master extends AbstractLoggingActor {
 				.match(Worker.WorkerFreeMessage.class, this::handle)
 				.match(Worker.CrackedPasswordMessage.class, this::handle)
 				.match(Worker.WorkerFullMessage.class, this::handle)
+				.match(Worker.FreeUniverseMessage.class, this::handle)
 				.matchAny(object -> this.log().info("Received unknown message: \"{}\"", object.toString()))
 				.build();
 	}
@@ -378,5 +379,10 @@ public class Master extends AbstractLoggingActor {
 		for(Map.Entry<char[], ActorRef> e: universeWorkerMapper.entrySet()) {
 			if (this.sender() == e.getValue()) this.sender().tell(new StartCrackingMessage(e.getKey()), this.self());;
 		}
+	}
+
+	protected void handle(Worker.FreeUniverseMessage message) {
+		universeWorkerMapper.remove(this.sender());
+		assignTask();
 	}
 }
