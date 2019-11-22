@@ -38,7 +38,6 @@ public class Worker extends AbstractLoggingActor {
 	public Worker() {
 		this.cluster = Cluster.get(this.context().system());
 		this.hashes = new HashMap<>();
-		this.hints = new HashMap<>();
 	}
 	
 	////////////////////
@@ -73,7 +72,6 @@ public class Worker extends AbstractLoggingActor {
 	private final Cluster cluster;
 
 	private HashMap<String, Integer> hashes;
-	private HashMap<String, String> hints;
 	private ActorRef master;
 
 	private boolean isCracked;
@@ -142,7 +140,7 @@ public class Worker extends AbstractLoggingActor {
 	private void handle(Master.CrackHintMessage message){
 		this.master = this.sender();
 	    this.hashes.put(message.getHash(), message.getId());
-	    if(hashes.size() < 100){
+	    if(hashes.size() < 200){
 	    	this.sender().tell(new WorkerFreeMessage(), this.self());
 		} else {
 	    	this.sender().tell(new WorkerFullMessage(), this.self());
@@ -150,21 +148,20 @@ public class Worker extends AbstractLoggingActor {
     }
 
     private void handle(Master.StartCrackingMessage message){
-		log().info("Started cracking {} hints in universe {} with length {}", String.valueOf(this.hashes.size()),new String(message.getUniverse()), String.valueOf(message.getUniverse().length));
+		//log().info("Started cracking {} hints in universe {} with length {}", String.valueOf(this.hashes.size()),new String(message.getUniverse()), String.valueOf(message.getUniverse().length));
 		this.sender().tell(new FreeUniverseMessage(), this.self());
 		heapPermutation(message.getUniverse().clone(), message.getUniverse().length);
 		//this.log().info("Worker free");
 		this.hashes.clear();
-		this.hints.clear();
 		this.sender().tell(new WorkerFreeMessage(), this.self());
 	}
 
     private void handle(Master.CrackPasswordMessage message){
-		this.hash = message.getPw().getEncodedPassword();
+		this.hash = message.getPassword();
 		this.isCracked = false;
 		this.password = "";
 	    HashSet<Character> alphabet = new HashSet<Character>();
-		for(String hint: message.getPw().getHints().values()){
+		for(String hint: message.getHints()){
             for (char c: message.getUniverse()){
             	if(!hint.contains(String.valueOf(c))) alphabet.add(c);
 			}
@@ -178,7 +175,7 @@ public class Worker extends AbstractLoggingActor {
 		}
 	    generateCombinations(abc, "",  abc.length, message.getLength());
 	    if(this.isCracked){
-	        this.sender().tell(new CrackedPasswordMessage(message.getPw().getId(), this.password), this.self());
+	        this.sender().tell(new CrackedPasswordMessage(message.getId(), this.password), this.self());
         } else {
 	    	this.sender().tell("Couldn't crack password", this.self());
 		}
@@ -231,7 +228,10 @@ public class Worker extends AbstractLoggingActor {
 			String c = new String(a);
 		    String h = hash(c);
 			HashMap<String, Integer> hs = (HashMap<String, Integer>) this.hashes.clone();
-		    for(String s: hs.keySet()) if(Objects.equals(h, s)) {foundHint(h, c);}
+		    try{
+		    	hs.get(h);
+		    	foundHint(h, c);
+			} catch (NullPointerException e){}
 		}
 
 		for (int i = 0; i < size; i++) {

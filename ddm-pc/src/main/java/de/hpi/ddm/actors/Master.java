@@ -78,12 +78,14 @@ public class Master extends AbstractLoggingActor {
 
 	@Data @NoArgsConstructor @AllArgsConstructor
 	public static class CrackPasswordMessage implements WorkloadMessage, Serializable {
-		private Password pw;
+		private int id;
+		private String password;
+		private String[] hints;
 		private char[] universe;
 		private int length;
 
 		@Override
-		public String getIdentifier() { return "CrackPassword: ".concat(pw.getName()); }
+		public String getIdentifier() { return "CrackPassword: ".concat(String.valueOf(id)); }
 	}
 
 	/////////////////
@@ -358,7 +360,14 @@ public class Master extends AbstractLoggingActor {
 	protected void handle(Worker.CrackedHintMessage message){
 
 		if(this.passwordMap.get(message.getId()).addDecodedHint(message.getHash(), message.getDecoded())){
-			addTask(new CrackPasswordMessage((Password) this.passwordMap.get(message.getId()).clone(), this.pChars.clone(), this.pLength));
+			Password pw = this.passwordMap.get(message.getId());
+			addTask(new CrackPasswordMessage(
+					pw.getId(),
+					pw.getEncodedPassword(),
+					pw.getHints().values().toArray(new String[pw.getHints().size()]),
+					this.pChars.clone(),
+					this.pLength
+			));
 		};
 	}
 
@@ -372,7 +381,6 @@ public class Master extends AbstractLoggingActor {
 			}
 		}
 		if(requestNewBatch){
-			System.out.println("ENTRO");
 			this.collector.tell(new Collector.PrintMessage(), this.self());
 			this.reader.tell(new Reader.ReadMessage(), this.self());
 		}
