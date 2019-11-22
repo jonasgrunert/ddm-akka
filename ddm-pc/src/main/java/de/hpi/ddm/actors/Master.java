@@ -9,7 +9,7 @@ import akka.actor.ActorRef;
 import akka.actor.PoisonPill;
 import akka.actor.Props;
 import akka.actor.Terminated;
-import com.sun.org.apache.xpath.internal.operations.Bool;
+//import com.sun.org.apache.xpath.internal.operations.Bool;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -133,8 +133,8 @@ public class Master extends AbstractLoggingActor {
 	private int pLength;
 	private char[] pChars;
 
-	private HashMap<Integer, List<WorkloadMessage>> universeMessageMapper;
-	private HashMap<ActorRef, Integer> universeWorkerMapper;
+	private HashMap<char[], List<WorkloadMessage>> universeMessageMapper;
+	private HashMap<char[], ActorRef> universeWorkerMapper;
 	// id to the password class
 	private HashMap<Integer, Password> passwordMap;
 	// way to identify if worker is in use or not boolean value inUse = true; notinUse = false
@@ -188,7 +188,7 @@ public class Master extends AbstractLoggingActor {
 		}
 	}
 
-	private void addTask(CrackHintMessage crackHintMessage, Integer mutation) {
+	private void addTask(CrackHintMessage crackHintMessage, char[] mutation) {
 		try {
 			List<WorkloadMessage> messagequeue = this.universeMessageMapper.get(mutation);
 			messagequeue.add(crackHintMessage);
@@ -199,19 +199,12 @@ public class Master extends AbstractLoggingActor {
 		}
 	}
 
-	private void addTask(StartCrackingMessage m, Integer u){
+	private void addTask(StartCrackingMessage m, char[] u){
 		this.universeMessageMapper.get(u).add(m);
 	}
 
 	private void addTask(CrackPasswordMessage m){
 		this.tasksPipe.add(m);
-	}
-
-	private ActorRef getWorkerforUniverse(int i) throws NoWorkerFoundException{
-		for(Map.Entry<ActorRef, Integer> e: this.universeWorkerMapper.entrySet()){
-			if(e.getValue() == i) return e.getKey();
-		}
-		throw new NoWorkerFoundException();
 	}
 
 	private ActorRef assignTask(WorkloadMessage task) throws NoWorkerFoundException{
@@ -235,19 +228,19 @@ public class Master extends AbstractLoggingActor {
 				WorkloadMessage task = this.tasksPipe.remove(0);
 				try { assignTask(task); } catch (NoWorkerFoundException err){};
 			}
-			for(Map.Entry<Integer, List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
+			for(Map.Entry<char[], List<WorkloadMessage>> e: this.universeMessageMapper.entrySet()){
 				if(e.getValue().size() > 0){
 					WorkloadMessage m = e.getValue().get(0);
 					try{
-						ActorRef worker = getWorkerforUniverse(e.getKey());
+						ActorRef worker = this.universeWorkerMapper.get(e.getKey());
 						if(!this.workerInUseMap.get(worker)){
 							assignTask(m, worker);
 							e.getValue().remove(m);
 						}
-					} catch (NoWorkerFoundException err){
+					} catch (NullPointerException err){
 						try{
 							ActorRef w = assignTask(m);
-							this.universeWorkerMapper.put(w, e.getKey());
+							this.universeWorkerMapper.put(e.getKey(), w);
 							e.getValue().remove(m);
 						} catch(NoWorkerFoundException er) {}
 					}
@@ -295,11 +288,12 @@ public class Master extends AbstractLoggingActor {
 		}
 		// We want to retrieve the password length and password chars from the lines
 		// And then add it to the state (and maybe throw an error if the state is'nt the same as read)
-		this.pLength = Integer.parseInt(message.getLines().get(0)[3]);
-		this.pChars = message.getLines().get(0)[2].toCharArray();
-		getMutations(this.pChars, this.pLength, mutations);
+		if(this.pLength != Integer.parseInt(message.getLines().get(0)[3])) {
+			this.pLength = Integer.parseInt(message.getLines().get(0)[3]);
+			this.pChars = message.getLines().get(0)[2].toCharArray();
+			getMutations(this.pChars, this.pLength, mutations);
+		}
 
-		int a = 0;
 		for (String[] line : message.getLines()) {
 			// We also want to start creating this wonderful hashmap where we store the hash as key with the corresponding string it generates
 			int Id = Integer.parseInt(line[0]);
@@ -307,18 +301,18 @@ public class Master extends AbstractLoggingActor {
 			String password = line[4];
 			String[] hints = IntStream.range(5, line.length).mapToObj(i -> line[i]).toArray(String[]::new);
 			Password pw = new Password(Id, name, password, hints);
-			a+=hints.length;
             this.passwordMap.put(Id, pw);
-			for(int i =0; i<  mutations.size(); i++){
+			for(char[] mutation: mutations){
 				for(String hint : hints){
-					addTask(new CrackHintMessage(Id, hint), i);
+					addTask(new CrackHintMessage(Id, hint), mutation);
 				}
 			}
 		}
-		for(int i=0; i< mutations.size(); i++){
-			addTask(new StartCrackingMessage(mutations.get(i).clone()), i);
+		for(char[] mutation: mutations){
+			addTask(new StartCrackingMessage(mutation.clone()), mutation);
 		}
-		//log().info("Finished setup: Trying to crack {} hints with {} mutations.", String.valueOf(a), String.valueOf(mutations.size()));
+		log().info("Finished setup");
+
 		assignTask();
 
 		this.collector.tell(new Collector.CollectMessage("Processed batch of size " + message.getLines().size()), this.self());
@@ -353,9 +347,7 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.CrackedHintMessage message){
-		int i = 1;
-		//for(String d: this.passwordMap.get(message.getId()).getHints().values()) if(!Objects.equals(d,"")) i++;
-		//log().info("Now cracked {} out of {} hints", String.valueOf(i), String.valueOf(this.passwordMap.get(message.getId()).getHints().size()));
+
 		if(this.passwordMap.get(message.getId()).addDecodedHint(message.getHash(), message.getDecoded())){
 			addTask(new CrackPasswordMessage((Password) this.passwordMap.get(message.getId()).clone(), this.pChars.clone(), this.pLength));
 		};
@@ -364,16 +356,14 @@ public class Master extends AbstractLoggingActor {
 	protected void handle(Worker.CrackedPasswordMessage message){
 		this.passwordMap.get(message.getId()).setDecodedPassword(message.getCracked());
 		logSolution(this.passwordMap.get(message.getId()));
-		boolean requestnewBatch = true;
+		boolean requestNewBatch = true;
 		for(Password pw: this.passwordMap.values()){
 			if(pw.getDecodedPassword() == ""){
-				requestnewBatch = false;
+				requestNewBatch = false;
 			}
 		}
-		if(requestnewBatch){
-			this.universeWorkerMapper.clear();
-			this.universeMessageMapper.clear();
-			this.mutations.clear();
+		if(requestNewBatch){
+			System.out.println("ENTRO");
 			this.collector.tell(new Collector.PrintMessage(), this.self());
 			this.reader.tell(new Reader.ReadMessage(), this.self());
 		}
@@ -385,6 +375,8 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	protected void handle(Worker.WorkerFullMessage message){
-		this.sender().tell(new StartCrackingMessage(mutations.get(universeWorkerMapper.get(this.sender())).clone()), this.self());
+		for(Map.Entry<char[], ActorRef> e: universeWorkerMapper.entrySet()) {
+			if (this.sender() == e.getValue()) this.sender().tell(new StartCrackingMessage(e.getKey()), this.self());;
+		}
 	}
 }
