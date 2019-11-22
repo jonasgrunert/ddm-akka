@@ -63,7 +63,7 @@ public class Master extends AbstractLoggingActor {
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class CrackHintMessage implements WorkloadMessage {
+	public static class CrackHintMessage implements WorkloadMessage, Serializable {
 		private int Id;
 		private String hash;
 		public String getIdentifier() { return "CrackHint: ".concat(hash); }
@@ -71,13 +71,13 @@ public class Master extends AbstractLoggingActor {
 
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class StartCrackingMessage implements WorkloadMessage {
+	public static class StartCrackingMessage implements WorkloadMessage, Serializable {
 		private char[] universe;
 		public String getIdentifier() { return "StartCracking: ".concat(new String(universe)); }
 	}
 
 	@Data @NoArgsConstructor @AllArgsConstructor
-	public static class CrackPasswordMessage implements WorkloadMessage {
+	public static class CrackPasswordMessage implements WorkloadMessage, Serializable {
 		private Password pw;
 		private char[] universe;
 		private int length;

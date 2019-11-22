@@ -1,5 +1,6 @@
 package de.hpi.ddm.actors;
 
+import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -44,21 +45,21 @@ public class Worker extends AbstractLoggingActor {
 	// Actor Messages //
 	////////////////////
 
-	public static class WorkerFreeMessage {}
+	public static class WorkerFreeMessage implements Serializable{}
 
-	public static class WorkerFullMessage {}
+	public static class WorkerFullMessage implements Serializable{}
 
-	public static class FreeUniverseMessage {}
+	public static class FreeUniverseMessage implements Serializable{}
 
 	@Data @AllArgsConstructor @NoArgsConstructor
-	public static class CrackedHintMessage {
+	public static class CrackedHintMessage implements Serializable {
 	    private int Id;
 	    private String hash;
 	    private String decoded;
     }
 
     @Data @AllArgsConstructor @NoArgsConstructor
-    public static class CrackedPasswordMessage {
+    public static class CrackedPasswordMessage implements Serializable{
         private int Id;
         private String cracked;
     }
