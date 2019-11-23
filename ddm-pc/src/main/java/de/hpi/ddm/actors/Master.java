@@ -266,7 +266,7 @@ public class Master extends AbstractLoggingActor {
 					for (Map.Entry<String, Integer> h : this.uncrackedHints.entrySet()) {
 						addTask(new CrackHintMessage(h.getValue(), h.getKey()), i);
 					}
-					addTask(new StartCrackingMessage(mutations.get(i).clone()));
+					addTask(new StartCrackingMessage(mutations.get(i).clone()), i);
 				}
 				assignTask();
 			}
