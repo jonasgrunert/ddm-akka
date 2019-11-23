@@ -261,12 +261,13 @@ public class Master extends AbstractLoggingActor {
 					}
 				}
 			}
-			if(this.tasksPipe.size() == 0 && noTasks && this.uncrackedHints.size() != 0){
+			if(this.uncrackedHints.size() != 0 && noTasks){
 				for(int i = 0; i <mutations.size(); i++) {
 					for(Map.Entry<String, Integer> h: this.uncrackedHints.entrySet()){
 						addTask(new CrackHintMessage(h.getValue(), h.getKey()), i);
 					}
 				}
+				assignTask();
 			}
 		}
 	}
@@ -283,8 +284,8 @@ public class Master extends AbstractLoggingActor {
 	private void logSolution(Password pw){
 		this.collector.tell(new Collector.CollectMessage(
 						"Cracked Password of "
-								.concat(pw.getName()).
-								concat(" with ID ")
+								.concat(pw.getName())
+								.concat(" with ID ")
 								.concat(String.valueOf(pw.getId()))
 								.concat(". The password is ")
 								.concat(pw.getDecodedPassword())),
